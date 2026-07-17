@@ -64,8 +64,8 @@
     "prepublishOnly": "pnpm run build && pnpm test"
   },
   "dependencies": {
-    "@opencode-ai/ai": "0.0.0-next-15703",
-    "@opencode-ai/plugin": "1.18.3",
+    "@opencode-ai/ai": "0.0.0-next-15707",
+    "@opencode-ai/plugin": "0.0.0-next-15707",
     "effect": "4.0.0-beta.83"
   },
   "devDependencies": {
