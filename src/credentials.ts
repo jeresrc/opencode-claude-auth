@@ -21,6 +21,11 @@ import { log } from "./logger.ts"
 export type { ClaudeCredentials } from "./keychain.ts"
 export type { ClaudeAccount } from "./keychain.ts"
 
+export type RefreshOptions = {
+  force?: boolean
+  reloadSource?: boolean
+}
+
 const CREDENTIAL_CACHE_TTL_MS = 30_000
 
 const accountCacheMap = new Map<
@@ -269,22 +274,26 @@ function refreshViaCli(): void {
 
 export function refreshIfNeeded(
   account?: ClaudeAccount,
+  options: RefreshOptions = {},
 ): ClaudeCredentials | null {
   const target = account ?? getActiveAccount()
   if (!target) return null
+
+  const reloadSource = options.reloadSource ?? true
+  const force = options.force ?? false
 
   // Pick up external updates to .credentials.json (e.g. switch_claude_account
   // on Windows). Bounded by getCachedCredentials's 30s TTL: fires at most
   // ~2x/min under load. macOS keychain sources stay on the in-memory path;
   // their state is mutated only by our own writeBackCredentials, so no
   // external-update vector exists for them.
-  if (target.source === "file") {
+  if (reloadSource && target.source === "file") {
     const onDisk = refreshAccount(target.source)
     if (onDisk) target.credentials = onDisk
   }
 
   const creds = target.credentials
-  if (creds.expiresAt > Date.now() + 60_000) return creds
+  if (!force && creds.expiresAt > Date.now() + 60_000) return creds
 
   log("refresh_needed", {
     source: target.source,

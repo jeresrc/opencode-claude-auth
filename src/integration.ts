@@ -3,7 +3,7 @@ import type {
   IntegrationMethodRegistration,
 } from "@opencode-ai/plugin/v2/effect/integration"
 import { Effect } from "effect"
-import { refreshIfNeeded } from "./credentials.ts"
+import { refreshIfNeeded, type RefreshOptions } from "./credentials.ts"
 import {
   readAllClaudeAccounts,
   type ClaudeAccount,
@@ -24,7 +24,10 @@ export type ClaudeOAuthCredential = {
 
 type IntegrationDeps = {
   readAccounts: () => ClaudeAccount[]
-  refreshIfNeeded: (account?: ClaudeAccount) => ClaudeCredentials | null
+  refreshIfNeeded: (
+    account?: ClaudeAccount,
+    options?: RefreshOptions,
+  ) => ClaudeCredentials | null
 }
 
 const defaultDeps: IntegrationDeps = {
@@ -139,9 +142,16 @@ export function registerAnthropicIntegration(
           const account = selectAccount(resolvedDeps.readAccounts(), source)
           const forcedAccount: ClaudeAccount = {
             ...account,
-            credentials: { ...account.credentials, expiresAt: 0 },
+            credentials: {
+              accessToken: credential.access,
+              refreshToken: credential.refresh,
+              expiresAt: 0,
+            },
           }
-          const refreshed = resolvedDeps.refreshIfNeeded(forcedAccount)
+          const refreshed = resolvedDeps.refreshIfNeeded(forcedAccount, {
+            force: true,
+            reloadSource: false,
+          })
           if (!refreshed) {
             throw new Error(
               `Failed to refresh Claude Code credentials for source: ${source}`,

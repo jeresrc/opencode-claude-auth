@@ -19,11 +19,14 @@ async function loadCredentialsWithCountingKeychain(
   credentialsModule: {
     getCachedCredentials: () => Creds | null
     getCredentialsForSync: () => Creds | null
-    refreshIfNeeded: (account?: {
-      label: string
-      source: string
-      credentials: Creds
-    }) => Creds | null
+    refreshIfNeeded: (
+      account?: {
+        label: string
+        source: string
+        credentials: Creds
+      },
+      options?: { force?: boolean; reloadSource?: boolean },
+    ) => Creds | null
     initAccounts: (accounts: unknown[]) => void
   }
   keychainModule: {
@@ -108,11 +111,14 @@ export function __setCredentials(c) {
     credentialsModule: credentialsModule as {
       getCachedCredentials: () => Creds | null
       getCredentialsForSync: () => Creds | null
-      refreshIfNeeded: (account?: {
-        label: string
-        source: string
-        credentials: Creds
-      }) => Creds | null
+      refreshIfNeeded: (
+        account?: {
+          label: string
+          source: string
+          credentials: Creds
+        },
+        options?: { force?: boolean; reloadSource?: boolean },
+      ) => Creds | null
       initAccounts: (accounts: unknown[]) => void
     },
     keychainModule: keychainModule as {
@@ -363,6 +369,44 @@ describe("credential caching", () => {
         writeCountBefore,
         "writeBackCredentials must not run when on-disk creds are already fresh; otherwise the stale in-memory refreshToken would be spliced into the new account's JSON blob",
       )
+    } finally {
+      Date.now = originalNow
+    }
+  })
+
+  it("refreshIfNeeded can skip file-source reload when caller supplies current credentials", async () => {
+    const originalNow = Date.now
+    const now = 1_700_000_000_000
+    Date.now = () => now
+
+    try {
+      const { credentialsModule, keychainModule } =
+        await loadCredentialsWithCountingKeychain(now + 10 * 60_000)
+
+      const account = {
+        label: "Account 1",
+        source: "file",
+        credentials: {
+          accessToken: "current-access",
+          refreshToken: "current-refresh",
+          expiresAt: now + 10 * 60_000,
+        },
+      }
+
+      keychainModule.__setCredentials({
+        accessToken: "stale-access",
+        refreshToken: "stale-refresh",
+        expiresAt: now + 10 * 60_000,
+      })
+
+      const result = credentialsModule.refreshIfNeeded(account, {
+        reloadSource: false,
+      })
+
+      assert.ok(result)
+      assert.equal(result.accessToken, "current-access")
+      assert.equal(result.refreshToken, "current-refresh")
+      assert.equal(keychainModule.__getReadCount(), 0)
     } finally {
       Date.now = originalNow
     }

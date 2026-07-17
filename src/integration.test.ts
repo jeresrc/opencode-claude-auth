@@ -40,6 +40,11 @@ type CapturedRegistration = {
   }) => Effect.Effect<unknown, unknown>
 }
 
+type RefreshOptions = {
+  force?: boolean
+  reloadSource?: boolean
+}
+
 function creds(id: string): ClaudeCredentials {
   return {
     accessToken: `access-${id}`,
@@ -211,15 +216,25 @@ describe("Anthropic integration registration", () => {
     )
   })
 
-  it("refresh uses metadata.source, forces refreshIfNeeded with a cloned expired account, and returns refreshed OAuth", async () => {
+  it("refresh uses the active OAuth credential when stored account credentials are stale", async () => {
     const { draft, registration } = createDraft()
-    const original = account("second", "Second")
+    const original: ClaudeAccount = {
+      source: "file",
+      label: "Claude",
+      credentials: {
+        accessToken: "access-stale",
+        refreshToken: "refresh-stale",
+        expiresAt: 1_700_000_900_000,
+      },
+    }
     let refreshAccount: ClaudeAccount | undefined
+    let refreshOptions: RefreshOptions | undefined
 
     registerAnthropicIntegration(draft, {
-      readAccounts: () => [account("first", "First"), original],
-      refreshIfNeeded: (target) => {
+      readAccounts: () => [original],
+      refreshIfNeeded: (target, options?: RefreshOptions) => {
         refreshAccount = target
+        refreshOptions = options
         return {
           accessToken: "access-refreshed",
           refreshToken: "refresh-refreshed",
@@ -232,24 +247,27 @@ describe("Anthropic integration registration", () => {
       registration().refresh({
         type: "oauth",
         methodID: CLAUDE_CODE_METHOD_ID,
-        access: "old-access",
-        refresh: "old-refresh",
-        expires: 1,
-        metadata: { source: "second" },
+        access: "access-current",
+        refresh: "refresh-current",
+        expires: 1_700_001_000_000,
+        metadata: { source: "file" },
       }),
     )
 
     assert.ok(refreshAccount)
     assert.notEqual(refreshAccount, original)
-    assert.equal(refreshAccount.source, "second")
+    assert.equal(refreshAccount.source, "file")
+    assert.equal(refreshAccount.credentials.accessToken, "access-current")
+    assert.equal(refreshAccount.credentials.refreshToken, "refresh-current")
     assert.equal(refreshAccount.credentials.expiresAt, 0)
+    assert.deepEqual(refreshOptions, { force: true, reloadSource: false })
     assert.deepEqual(refreshed, {
       type: "oauth",
       methodID: CLAUDE_CODE_METHOD_ID,
       access: "access-refreshed",
       refresh: "refresh-refreshed",
       expires: 1_700_000_600_000,
-      metadata: { source: "second" },
+      metadata: { source: "file" },
     })
   })
 
