@@ -44,7 +44,11 @@ export function applyAnthropicCatalog(draft: CatalogDraft): void {
 
   for (const [modelID] of record.models) {
     draft.model.update(ANTHROPIC_PROVIDER_ID, modelID, (model) => {
-      if (isAnthropicPackage(model.package)) {
+      const inheritsProvider = model.package === undefined
+      const usesAnthropicPackage = isAnthropicPackage(model.package)
+      if (!inheritsProvider && !usesAnthropicPackage) return
+
+      if (usesAnthropicPackage) {
         model.package = url
       }
       model.cost = model.cost.map(zeroCost)

@@ -95,6 +95,11 @@ test("routes only the Anthropic provider and its recognized models through the p
     package: "@opencode-ai/ai/providers/anthropic",
   })
   const legacyModel = makeModel({ id: "claude-legacy", package: undefined })
+  const customModel = makeModel({
+    id: "claude-custom",
+    package: "vendor:custom-anthropic-model",
+  })
+  const customBefore = structuredClone(customModel)
   const githubCopilotModel = makeModel({
     id: "copilot-claude",
     providerID: "github-copilot",
@@ -118,6 +123,7 @@ test("routes only the Anthropic provider and its recognized models through the p
         [explicitAisdkModel.id, explicitAisdkModel],
         [explicitNativeModel.id, explicitNativeModel],
         [legacyModel.id, legacyModel],
+        [customModel.id, customModel],
       ]),
     },
     {
@@ -145,6 +151,7 @@ test("routes only the Anthropic provider and its recognized models through the p
   assert.equal(explicitAisdkModel.package, fileUrl)
   assert.equal(explicitNativeModel.package, fileUrl)
   assert.equal(legacyModel.package, undefined)
+  assert.deepEqual(customModel, customBefore)
   assert.deepEqual(explicitAisdkModel.cost, [
     {
       tier: { type: "context", size: 200_000 },
@@ -153,6 +160,7 @@ test("routes only the Anthropic provider and its recognized models through the p
       cache: { read: 0, write: 0 },
     },
   ])
+  assert.deepEqual(legacyModel.cost, explicitAisdkModel.cost)
   assert.equal(explicitAisdkModel.metadata, metadata)
   assert.equal(explicitAisdkModel.capabilities, capabilities)
   assert.equal(explicitAisdkModel.variants, variants)
