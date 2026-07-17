@@ -8,8 +8,8 @@ export default Plugin.define({
   id: "opencode-claude-auth",
   async setup(context) {
     initLogger()
+    await context.integration.transform(registerAnthropicIntegration)
     await context.catalog.transform(applyAnthropicCatalog)
     await context.session.hook("context", injectClaudeIdentity)
-    await context.integration.transform(registerAnthropicIntegration)
   },
 })

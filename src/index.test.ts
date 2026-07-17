@@ -9,6 +9,31 @@ test("exports the OpenCode v2 plugin contract", () => {
   assert.equal(typeof plugin.setup, "function")
 })
 
+test("setup registers v2 plugin domains in Integration, catalog, session order", async () => {
+  const order: string[] = []
+  const context = {
+    integration: {
+      transform: async () => {
+        order.push("integration")
+      },
+    },
+    catalog: {
+      transform: async () => {
+        order.push("catalog")
+      },
+    },
+    session: {
+      hook: async (name: string) => {
+        order.push(`session:${name}`)
+      },
+    },
+  } as unknown as Parameters<typeof plugin.setup>[0]
+
+  await plugin.setup(context)
+
+  assert.deepEqual(order, ["integration", "catalog", "session:context"])
+})
+
 test("wrapper only re-exports the default plugin from dist", async () => {
   const wrapper = await readFile(
     new URL("../opencode-claude-auth.js", import.meta.url),
