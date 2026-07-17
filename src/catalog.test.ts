@@ -163,7 +163,7 @@ test("routes only the Anthropic provider and its recognized models through the p
   assert.deepEqual(legacyModel.cost, explicitAisdkModel.cost)
   assert.equal(explicitAisdkModel.metadata, metadata)
   assert.equal(explicitAisdkModel.capabilities, capabilities)
-  assert.equal(explicitAisdkModel.variants, variants)
+  assert.deepEqual(explicitAisdkModel.variants.slice(1), variants)
   assert.deepEqual(githubCopilotModel, githubBefore)
   assert.deepEqual(openaiModel, openaiBefore)
 })
@@ -188,4 +188,87 @@ test("does not hijack an Anthropic record whose provider package is not recogniz
   applyAnthropicCatalog(draftFrom(records))
 
   assert.deepEqual(records[0], before)
+})
+
+test("adds a no-effort variant to routed Anthropic models without mutating existing variants", () => {
+  const existingNone = {
+    id: "none",
+    settings: { thinking: { type: "disabled" }, effort: "custom" },
+    label: "No thinking",
+  }
+  const inheritedModel = makeModel({
+    id: "claude-inherited",
+    package: undefined,
+    variants: [{ id: "thinking", settings: { effort: "high" } }],
+  })
+  const explicitModel = makeModel({
+    id: "claude-explicit",
+    package: "aisdk:@ai-sdk/anthropic",
+    variants: [{ id: "thinking", settings: { effort: "medium" } }],
+  })
+  const modelWithNone = makeModel({
+    id: "claude-existing-none",
+    package: "@opencode-ai/ai/providers/anthropic",
+    variants: [existingNone, { id: "thinking", settings: { effort: "low" } }],
+  })
+  const customModel = makeModel({
+    id: "claude-custom-package",
+    package: "vendor:custom-anthropic-model",
+    variants: [{ id: "thinking", settings: { effort: "high" } }],
+  })
+  const openaiModel = makeModel({
+    id: "openai-claude-ish",
+    providerID: "openai",
+    package: "aisdk:@ai-sdk/anthropic",
+    variants: [{ id: "thinking", settings: { effort: "high" } }],
+  })
+  const customBefore = structuredClone(customModel)
+  const openaiBefore = structuredClone(openaiModel)
+  const records: ProviderRecord[] = [
+    {
+      provider: {
+        id: "anthropic",
+        name: "Anthropic",
+        package: "aisdk:@ai-sdk/anthropic",
+      },
+      models: new Map([
+        [inheritedModel.id, inheritedModel],
+        [explicitModel.id, explicitModel],
+        [modelWithNone.id, modelWithNone],
+        [customModel.id, customModel],
+      ]),
+    },
+    {
+      provider: {
+        id: "openai",
+        name: "OpenAI",
+        package: "aisdk:@ai-sdk/anthropic",
+      },
+      models: new Map([[openaiModel.id, openaiModel]]),
+    },
+  ]
+
+  applyAnthropicCatalog(draftFrom(records))
+
+  const noEffortVariant = {
+    id: "none",
+    settings: { thinking: { type: "disabled" } },
+  }
+  assert.deepEqual(inheritedModel.variants[0], noEffortVariant)
+  assert.equal("effort" in inheritedModel.variants[0].settings, false)
+  assert.deepEqual(inheritedModel.variants.slice(1), [
+    { id: "thinking", settings: { effort: "high" } },
+  ])
+  assert.deepEqual(explicitModel.variants[0], noEffortVariant)
+  assert.equal("effort" in explicitModel.variants[0].settings, false)
+  assert.deepEqual(explicitModel.variants.slice(1), [
+    { id: "thinking", settings: { effort: "medium" } },
+  ])
+  assert.equal(modelWithNone.variants[0], existingNone)
+  assert.equal(
+    modelWithNone.variants.filter((variant) => variant.id === "none").length,
+    1,
+  )
+  assert.deepEqual(customModel, customBefore)
+  assert.deepEqual(openaiModel, openaiBefore)
 })

@@ -9,6 +9,7 @@ const ANTHROPIC_PACKAGES = new Set([
 
 type CatalogModel = NonNullable<ReturnType<CatalogDraft["model"]["get"]>>
 type ModelCost = CatalogModel["cost"][number]
+type ModelVariant = CatalogModel["variants"][number]
 
 export function providerFileUrl(baseUrl = import.meta.url): string {
   return new URL("./provider.js", baseUrl).href
@@ -31,6 +32,14 @@ function zeroCost(cost: ModelCost): ModelCost {
   }
 }
 
+function ensureNoEffortVariant(variants: ModelVariant[]): ModelVariant[] {
+  if (variants.some((variant) => variant.id === "none")) return variants
+  return [
+    { id: "none", settings: { thinking: { type: "disabled" } } },
+    ...variants,
+  ]
+}
+
 export function applyAnthropicCatalog(draft: CatalogDraft): void {
   const record = draft.provider.get(ANTHROPIC_PROVIDER_ID)
   if (!record || !isAnthropicPackage(record.provider.package)) return
@@ -51,6 +60,7 @@ export function applyAnthropicCatalog(draft: CatalogDraft): void {
       if (usesAnthropicPackage) {
         model.package = url
       }
+      model.variants = ensureNoEffortVariant(model.variants)
       model.cost = model.cost.map(zeroCost)
     })
   }
