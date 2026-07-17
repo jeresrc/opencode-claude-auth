@@ -18,9 +18,10 @@ test("exports the OpenCode v2 plugin contract", () => {
   assert.equal(typeof plugin.setup, "function")
 })
 
-test("setup registers v2 plugin domains in Integration, catalog, session order", async () => {
+test("setup registers v2 plugin domains then starts rate-limit listener", async () => {
   const order: string[] = []
   const registrations: unknown[] = []
+  let subscriptionStopped = false
   const context = {
     integration: {
       transform: async (handler: unknown) => {
@@ -39,17 +40,42 @@ test("setup registers v2 plugin domains in Integration, catalog, session order",
         order.push(`session:${name}`)
         registrations.push(handler)
       },
+      synthetic: async () => {},
+    },
+    event: {
+      subscribe: () => {
+        order.push("event:subscribe")
+        return {
+          [Symbol.asyncIterator]: () => ({
+            next: async () =>
+              await new Promise<IteratorResult<unknown>>(() => {}),
+            return: async () => {
+              subscriptionStopped = true
+              return { value: undefined, done: true }
+            },
+          }),
+        }
+      },
     },
   } as unknown as Parameters<typeof plugin.setup>[0]
 
-  await plugin.setup(context)
+  const cleanup = await plugin.setup(context)
 
-  assert.deepEqual(order, ["integration", "catalog", "session:context"])
+  assert.deepEqual(order, [
+    "integration",
+    "catalog",
+    "session:context",
+    "event:subscribe",
+  ])
   assert.deepEqual(registrations, [
     registerAnthropicIntegration,
     applyAnthropicCatalog,
     injectClaudeIdentity,
   ])
+  assert.equal(typeof cleanup, "function")
+
+  await cleanup?.()
+  assert.equal(subscriptionStopped, true)
 })
 
 test("local v2 docs use plugins file URL and do not document removed v1 auth paths", async () => {
