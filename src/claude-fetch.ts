@@ -252,6 +252,14 @@ function sanitizeErrorMessage(message: string): string {
       /Authorization:\s*Bearer\s+[^\s"']+/gi,
       "Authorization: Bearer REDACTED",
     )
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/-]+/g, "Bearer REDACTED")
+    .replace(/\baccess_token=([^&\s"'{};,]+)/gi, "access_token=REDACTED")
+    .replace(/("refresh_token"\s*:\s*")[^"]+(")/gi, "$1REDACTED$2")
+    .replace(/\brefresh_token=([^&\s"'{};,]+)/gi, "refresh_token=REDACTED")
+    .replace(
+      /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)?\b/g,
+      "JWT_REDACTED",
+    )
     .replace(/sk-ant-[A-Za-z0-9_-]+/g, "sk-ant-REDACTED")
 
   if (sanitized.length > MAX_ERROR_MESSAGE_LENGTH) {

@@ -446,6 +446,63 @@ describe("Claude OAuth fetch pipeline", () => {
     assert.ok(logOutput.includes("REDACTED"))
   })
 
+  it("redacts OAuth secrets embedded in error messages before logging or warning", async () => {
+    const logged: string[] = []
+    initLogger({
+      stream: {
+        write(chunk: string) {
+          logged.push(chunk)
+          return true
+        },
+      } as never,
+    })
+    const originalWarn = console.warn
+    const warnings: string[] = []
+    const bearerToken = "secret-token-value"
+    const accessToken = "oauth-access-secret-123"
+    const refreshToken = "oauth-refresh-secret-456"
+    const jwt = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.payload.signature"
+    const errorBody = JSON.stringify({
+      error: {
+        message: `upstream OAuth failure: Bearer ${bearerToken}; access_token=${accessToken}; {"refresh_token":"${refreshToken}"}; jwt=${jwt}`,
+      },
+    })
+    const upstream = (async () =>
+      new Response(errorBody, { status: 500 })) as typeof fetch
+    const claudeFetch = createClaudeFetch({
+      accessToken: "fixed-token",
+      upstream,
+    })
+
+    try {
+      console.warn = (message: string) => {
+        warnings.push(message)
+      }
+      const response = await claudeFetch(
+        "https://api.anthropic.com/v1/messages",
+        {
+          method: "POST",
+          body: JSON.stringify({ model: "claude-sonnet-4-6", messages: [] }),
+        },
+      )
+      await response.text()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    } finally {
+      console.warn = originalWarn
+    }
+
+    const warning = warnings.join("\n")
+    const logOutput = logged.join("")
+    for (const secret of [bearerToken, accessToken, refreshToken, jwt]) {
+      assert.ok(!warning.includes(secret), `warning leaked ${secret}`)
+      assert.ok(!logOutput.includes(secret), `log leaked ${secret}`)
+    }
+    assert.ok(warning.includes("upstream OAuth failure"))
+    assert.ok(logOutput.includes("upstream OAuth failure"))
+    assert.ok(warning.includes("REDACTED"))
+    assert.ok(logOutput.includes("REDACTED"))
+  })
+
   it("transforms streamed response tool names back to OpenCode names", async () => {
     const upstream = (async () =>
       new Response(
