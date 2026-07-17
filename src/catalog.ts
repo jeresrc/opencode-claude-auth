@@ -8,7 +8,6 @@ const ANTHROPIC_PACKAGES = new Set([
 ])
 
 type CatalogModel = NonNullable<ReturnType<CatalogDraft["model"]["get"]>>
-type ModelCost = CatalogModel["cost"][number]
 type ModelVariant = CatalogModel["variants"][number]
 
 export function providerFileUrl(baseUrl = import.meta.url): string {
@@ -17,19 +16,6 @@ export function providerFileUrl(baseUrl = import.meta.url): string {
 
 function isAnthropicPackage(value: unknown): value is string {
   return typeof value === "string" && ANTHROPIC_PACKAGES.has(value)
-}
-
-function zeroCost(cost: ModelCost): ModelCost {
-  return {
-    ...cost,
-    input: 0,
-    output: 0,
-    cache: {
-      ...cost.cache,
-      read: 0,
-      write: 0,
-    },
-  }
 }
 
 function ensureNoEffortVariant(variants: ModelVariant[]): ModelVariant[] {
@@ -61,7 +47,7 @@ export function applyAnthropicCatalog(draft: CatalogDraft): void {
         model.package = url
       }
       model.variants = ensureNoEffortVariant(model.variants)
-      model.cost = model.cost.map(zeroCost)
+      model.cost = []
     })
   }
 }

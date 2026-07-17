@@ -152,15 +152,9 @@ test("routes only the Anthropic provider and its recognized models through the p
   assert.equal(explicitNativeModel.package, fileUrl)
   assert.equal(legacyModel.package, undefined)
   assert.deepEqual(customModel, customBefore)
-  assert.deepEqual(explicitAisdkModel.cost, [
-    {
-      tier: { type: "context", size: 200_000 },
-      input: 0,
-      output: 0,
-      cache: { read: 0, write: 0 },
-    },
-  ])
-  assert.deepEqual(legacyModel.cost, explicitAisdkModel.cost)
+  assert.deepEqual(explicitAisdkModel.cost, [])
+  assert.deepEqual(explicitNativeModel.cost, [])
+  assert.deepEqual(legacyModel.cost, [])
   assert.equal(explicitAisdkModel.metadata, metadata)
   assert.equal(explicitAisdkModel.capabilities, capabilities)
   assert.deepEqual(explicitAisdkModel.variants.slice(1), variants)
