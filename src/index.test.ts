@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { readFile } from "node:fs/promises"
+import { access, readFile } from "node:fs/promises"
 import test from "node:test"
 import plugin from "./index.ts"
 
@@ -49,12 +49,16 @@ test("wrapper only re-exports the default plugin from dist", async () => {
   assert.equal(wrapper.trim(), 'export { default } from "./dist/index.js"')
 })
 
-test("package exports only implemented entrypoints", async () => {
+test("package exports implemented entrypoints including the native provider", async () => {
   const pkg = JSON.parse(
     await readFile(new URL("../package.json", import.meta.url), "utf8"),
   ) as { exports: Record<string, unknown> }
 
   assert.ok(pkg.exports["."])
   assert.ok(pkg.exports["./server"])
-  assert.equal(pkg.exports["./provider"], undefined)
+  assert.deepEqual(pkg.exports["./provider"], {
+    types: "./dist/provider.d.ts",
+    import: "./dist/provider.js",
+  })
+  await access(new URL("./provider.ts", import.meta.url))
 })

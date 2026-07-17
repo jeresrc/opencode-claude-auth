@@ -89,12 +89,19 @@ export function repairToolPairs(messages: Message[]): Message[] {
 export function transformBody(
   body: BodyInit | null | undefined,
 ): BodyInit | null | undefined {
-  if (typeof body !== "string") {
+  const bodyText =
+    typeof body === "string"
+      ? body
+      : body instanceof Uint8Array
+        ? new TextDecoder().decode(body)
+        : undefined
+
+  if (bodyText === undefined) {
     return body
   }
 
   try {
-    const parsed = JSON.parse(body) as {
+    const parsed = JSON.parse(bodyText) as {
       model?: string
       system?: SystemEntry[]
       thinking?: Record<string, unknown>
