@@ -32,10 +32,6 @@
       "types": "./dist/index.d.ts",
       "import": "./opencode-claude-auth.js"
     },
-    "./provider": {
-      "types": "./dist/provider.d.ts",
-      "import": "./dist/provider.js"
-    },
     "./claude-auth-plugin": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
@@ -67,16 +63,16 @@
     "format": "oxfmt --write .",
     "prepublishOnly": "pnpm run build && pnpm test"
   },
+  "dependencies": {
+    "@opencode-ai/ai": "0.0.0-next-15703",
+    "@opencode-ai/plugin": "1.18.3",
+    "effect": "4.0.0-beta.83"
+  },
   "devDependencies": {
     "@types/node": "^25.5.0",
     "oxfmt": "0.41.0",
     "oxlint": "1.56.0",
     "typescript": "^5.0.0"
   },
-  "packageManager": "pnpm@10.32.1",
-  "dependencies": {
-    "@opencode-ai/ai": "0.0.0-next-15703",
-    "@opencode-ai/plugin": "1.18.3",
-    "effect": "4.0.0-beta.83"
-  }
+  "packageManager": "pnpm@10.32.1"
 }
