@@ -7,11 +7,13 @@ import {
   createClaudeFetch,
   fetchWithRetry,
 } from "./claude-fetch.ts"
+import { closeLogger, initLogger } from "./logger.ts"
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 afterEach(() => {
   resetExcludedBetas()
+  closeLogger()
   delete process.env.ANTHROPIC_BETA_FLAGS
   delete process.env.OPENCODE_CLAUDE_AUTH_MAX_RETRY_MS
 })
@@ -87,6 +89,26 @@ describe("Claude OAuth fetch pipeline", () => {
       betas.filter((beta) => beta === "claude-code-20250219").length,
       1,
     )
+  })
+
+  it("filters excluded beta flags after merging model and incoming betas", () => {
+    const headers = buildRequestHeaders(
+      "https://api.anthropic.com/v1/messages",
+      {
+        headers: {
+          "anthropic-beta":
+            "incoming-beta,context-1m-2025-08-07,interleaved-thinking-2025-05-14",
+        },
+      },
+      "access-token",
+      "claude-sonnet-4-6",
+      new Set(["context-1m-2025-08-07", "interleaved-thinking-2025-05-14"]),
+    )
+
+    const betas = (headers.get("anthropic-beta") ?? "").split(",")
+    assert.ok(betas.includes("incoming-beta"))
+    assert.ok(!betas.includes("context-1m-2025-08-07"))
+    assert.ok(!betas.includes("interleaved-thinking-2025-05-14"))
   })
 
   it("transforms request bodies through billing, system, and tool-name rewrites", async () => {
@@ -197,6 +219,46 @@ describe("Claude OAuth fetch pipeline", () => {
     assert.deepEqual(slept, [2000, 4000])
   })
 
+  it("does not retry retryable responses when the request body is a one-shot stream", async () => {
+    const originalWarn = console.warn
+    let calls = 0
+    const upstream = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      calls += 1
+      assert.ok(init?.body instanceof ReadableStream)
+      await new Response(init.body).text()
+      return new Response("rate limited", { status: 429 })
+    }) as typeof fetch
+    const claudeFetch = createClaudeFetch({
+      accessToken: "fixed-token",
+      upstream,
+      sleep: async () => {},
+      retries: 3,
+    })
+
+    try {
+      console.warn = () => {}
+      const response = await claudeFetch(
+        "https://api.anthropic.com/v1/messages",
+        {
+          method: "POST",
+          body: new ReadableStream({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode('{"model":"claude"}'))
+              controller.close()
+            },
+          }),
+        },
+      )
+
+      assert.equal(response.status, 429)
+      assert.equal(await text(response), "rate limited")
+      assert.equal(calls, 1)
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    } finally {
+      console.warn = originalWarn
+    }
+  })
+
   it("honors retry-after delay caps and env overrides without sleeping when capped", async () => {
     let calls = 0
     const slept: number[] = []
@@ -287,6 +349,103 @@ describe("Claude OAuth fetch pipeline", () => {
     assert.ok(betaHeaders[1].includes("custom-beta"))
   })
 
+  it("does not run beta retries when the request body is a one-shot stream", async () => {
+    const originalWarn = console.warn
+    let calls = 0
+    const upstream = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      calls += 1
+      assert.ok(init?.body instanceof ReadableStream)
+      await new Response(init.body).text()
+      return new Response(
+        JSON.stringify({
+          error: {
+            message: "Extra usage is required for long context requests",
+          },
+        }),
+        { status: 400 },
+      )
+    }) as typeof fetch
+    const claudeFetch = createClaudeFetch({
+      accessToken: "fixed-token",
+      upstream,
+      sleep: async () => {},
+      retries: 3,
+    })
+
+    try {
+      console.warn = () => {}
+      const response = await claudeFetch(
+        "https://api.anthropic.com/v1/messages",
+        {
+          method: "POST",
+          body: new ReadableStream({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode('{"model":"claude"}'))
+              controller.close()
+            },
+          }),
+        },
+      )
+
+      assert.equal(response.status, 400)
+      assert.equal(calls, 1)
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    } finally {
+      console.warn = originalWarn
+    }
+  })
+
+  it("sanitizes and truncates error bodies before logging or warning", async () => {
+    const logged: string[] = []
+    initLogger({
+      stream: {
+        write(chunk: string) {
+          logged.push(chunk)
+          return true
+        },
+      } as never,
+    })
+    const originalWarn = console.warn
+    const warnings: string[] = []
+    const secretBearer = "Authorization: Bearer secret-token-value"
+    const secretApiKey = "sk-ant-api03-secret-token-value"
+    const largeBody = `${secretBearer}\n${secretApiKey}\n${"x".repeat(5000)}`
+    const upstream = (async () =>
+      new Response(largeBody, { status: 500 })) as typeof fetch
+    const claudeFetch = createClaudeFetch({
+      accessToken: "fixed-token",
+      upstream,
+    })
+
+    try {
+      console.warn = (message: string) => {
+        warnings.push(message)
+      }
+      const response = await claudeFetch(
+        "https://api.anthropic.com/v1/messages",
+        {
+          method: "POST",
+          body: JSON.stringify({ model: "claude-sonnet-4-6", messages: [] }),
+        },
+      )
+      await response.text()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    } finally {
+      console.warn = originalWarn
+    }
+
+    const warning = warnings.join("\n")
+    const logOutput = logged.join("")
+    assert.ok(warning.length < 1500, `warning was ${warning.length} chars`)
+    assert.ok(logOutput.length < 2000, `log was ${logOutput.length} chars`)
+    assert.ok(!warning.includes(secretBearer))
+    assert.ok(!warning.includes(secretApiKey))
+    assert.ok(!logOutput.includes(secretBearer))
+    assert.ok(!logOutput.includes(secretApiKey))
+    assert.ok(warning.includes("REDACTED"))
+    assert.ok(logOutput.includes("REDACTED"))
+  })
+
   it("transforms streamed response tool names back to OpenCode names", async () => {
     const upstream = (async () =>
       new Response(
@@ -351,14 +510,5 @@ describe("Claude OAuth fetch pipeline", () => {
     assert.equal(forwardedHeaders?.get("x-from-init"), "keep-init")
     assert.equal(forwardedHeaders?.get("x-api-key"), null)
     assert.equal(forwardedHeaders?.get("authorization"), "Bearer fixed-token")
-  })
-
-  it("re-exports public fetch helpers from the plugin entrypoint", async () => {
-    const entrypoint = await import("./index.ts")
-
-    assert.equal(entrypoint.buildRequestUrl, buildRequestUrl)
-    assert.equal(entrypoint.buildRequestHeaders, buildRequestHeaders)
-    assert.equal(entrypoint.fetchWithRetry, fetchWithRetry)
-    assert.equal(entrypoint.createClaudeFetch, createClaudeFetch)
   })
 })

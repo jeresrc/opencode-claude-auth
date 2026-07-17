@@ -3,6 +3,12 @@ import { readFile } from "node:fs/promises"
 import test from "node:test"
 import plugin from "./index.ts"
 
+test("entrypoint exposes only the default v2 plugin export", async () => {
+  const entrypoint = await import("./index.ts")
+
+  assert.deepEqual(Object.keys(entrypoint), ["default"])
+})
+
 test("exports the OpenCode v2 plugin contract", () => {
   assert.equal(typeof plugin, "object")
   assert.equal(plugin.id, "opencode-claude-auth")

@@ -65,6 +65,7 @@ export function buildRequestUrl(input: RequestInfo | URL): string | URL {
 const sessionId = randomUUID()
 
 const DEFAULT_MAX_RETRY_DELAY_MS = 30_000
+const MAX_ERROR_MESSAGE_LENGTH = 1000
 
 function getMaxRetryDelayMs(): number {
   const env = process.env.OPENCODE_CLAUDE_AUTH_MAX_RETRY_MS
@@ -79,6 +80,18 @@ async function defaultSleep(delayMs: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, delayMs))
 }
 
+function isReplayableBody(body: BodyInit | null | undefined): boolean {
+  return !(body instanceof ReadableStream)
+}
+
+function isReplayableRequest(
+  input: RequestInfo | URL,
+  init: RequestInit,
+): boolean {
+  if (typeof init.body !== "undefined") return isReplayableBody(init.body)
+  return !(input instanceof Request && input.body)
+}
+
 export async function fetchWithRetry(
   input: RequestInfo | URL,
   init: RequestInit = {},
@@ -86,7 +99,7 @@ export async function fetchWithRetry(
   upstream: FetchFn = fetch,
   sleep: SleepFn = defaultSleep,
 ): Promise<Response> {
-  const attempts = Math.max(1, retries)
+  const attempts = Math.max(1, isReplayableRequest(input, init) ? retries : 1)
   for (let attempt = 0; attempt < attempts; attempt++) {
     const response = await upstream(input, init)
     if (
@@ -173,7 +186,7 @@ export function buildRequestHeaders(
         .map((item) => item.trim())
         .filter(Boolean),
     ]),
-  ]
+  ].filter((beta) => !excludedBetas?.has(beta))
 
   headers.set("authorization", `Bearer ${accessToken}`)
   headers.set("anthropic-version", "2023-06-01")
@@ -224,12 +237,28 @@ function warnOnErrorResponse(response: Response, modelId: string): void {
         }
         message = parsed.error?.message ?? parsed.error?.type ?? errorBody
       } catch {}
+      message = sanitizeErrorMessage(message)
       log("fetch_error_response", { status, modelId, message })
       console.warn(
         `opencode-claude-auth: API ${status} for ${modelId}: ${message}`,
       )
     })
     .catch(() => {})
+}
+
+function sanitizeErrorMessage(message: string): string {
+  let sanitized = message
+    .replace(
+      /Authorization:\s*Bearer\s+[^\s"']+/gi,
+      "Authorization: Bearer REDACTED",
+    )
+    .replace(/sk-ant-[A-Za-z0-9_-]+/g, "sk-ant-REDACTED")
+
+  if (sanitized.length > MAX_ERROR_MESSAGE_LENGTH) {
+    sanitized = `${sanitized.slice(0, MAX_ERROR_MESSAGE_LENGTH)}…[truncated]`
+  }
+
+  return sanitized
 }
 
 export function createClaudeFetch(options: ClaudeFetchOptions): FetchFn {
@@ -251,6 +280,8 @@ export function createClaudeFetch(options: ClaudeFetchOptions): FetchFn {
       excluded,
     )
     const body = transformBody(originalBody)
+    const isReplayable = isReplayableBody(body)
+    const effectiveRetries = isReplayable ? retries : 1
     const method =
       requestInit.method ??
       (input instanceof Request ? input.method : undefined)
@@ -265,7 +296,7 @@ export function createClaudeFetch(options: ClaudeFetchOptions): FetchFn {
     let response = await fetchWithRetry(
       requestUrl,
       { ...requestInit, method, body, headers },
-      retries,
+      effectiveRetries,
       upstream,
       sleep,
     )
@@ -273,6 +304,7 @@ export function createClaudeFetch(options: ClaudeFetchOptions): FetchFn {
     log("fetch_response", { status: response.status, modelId, retryAttempt: 0 })
 
     for (let attempt = 0; attempt < LONG_CONTEXT_BETAS.length; attempt++) {
+      if (!isReplayable) break
       if (response.status !== 400 && response.status !== 429) break
 
       const responseBody = await response.clone().text()
@@ -295,7 +327,7 @@ export function createClaudeFetch(options: ClaudeFetchOptions): FetchFn {
       response = await fetchWithRetry(
         requestUrl,
         { ...requestInit, method, body, headers: retryHeaders },
-        retries,
+        effectiveRetries,
         upstream,
         sleep,
       )
