@@ -163,6 +163,96 @@ describe("Claude OAuth fetch pipeline", () => {
     assert.equal(messages[0].content[2].name, "mcp_Read")
   })
 
+  it("detects model ids from string request bodies before building beta headers", async () => {
+    let betaHeader = ""
+    const upstream = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      betaHeader = new Headers(init?.headers).get("anthropic-beta") ?? ""
+      return new Response("ok")
+    }) as typeof fetch
+    const claudeFetch = createClaudeFetch({
+      accessToken: "fixed-token",
+      upstream,
+    })
+
+    await claudeFetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      body: JSON.stringify({ model: "claude-haiku-4-5", messages: [] }),
+    })
+
+    assert.ok(!betaHeader.includes("interleaved-thinking-2025-05-14"))
+    assert.ok(betaHeader.includes("claude-code-20250219"))
+  })
+
+  it("detects model ids from Uint8Array request bodies before building beta headers", async () => {
+    let betaHeader = ""
+    const upstream = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      betaHeader = new Headers(init?.headers).get("anthropic-beta") ?? ""
+      return new Response("ok")
+    }) as typeof fetch
+    const claudeFetch = createClaudeFetch({
+      accessToken: "fixed-token",
+      upstream,
+    })
+
+    await claudeFetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      body: new TextEncoder().encode(
+        JSON.stringify({ model: "claude-haiku-4-5", messages: [] }),
+      ),
+    })
+
+    assert.ok(!betaHeader.includes("interleaved-thinking-2025-05-14"))
+    assert.ok(betaHeader.includes("claude-code-20250219"))
+  })
+
+  it("falls back to unknown for malformed byte request bodies", async () => {
+    let betaHeader = ""
+    const upstream = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      betaHeader = new Headers(init?.headers).get("anthropic-beta") ?? ""
+      return new Response("ok")
+    }) as typeof fetch
+    const claudeFetch = createClaudeFetch({
+      accessToken: "fixed-token",
+      upstream,
+    })
+
+    await claudeFetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      body: new TextEncoder().encode("{not-json"),
+    })
+
+    assert.ok(betaHeader.includes("interleaved-thinking-2025-05-14"))
+  })
+
+  it("does not consume one-shot streams while attempting model detection", async () => {
+    let betaHeader = ""
+    let forwardedBody = ""
+    const upstream = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      assert.ok(init?.body instanceof ReadableStream)
+      betaHeader = new Headers(init.headers).get("anthropic-beta") ?? ""
+      forwardedBody = await new Response(init.body).text()
+      return new Response("ok")
+    }) as typeof fetch
+    const claudeFetch = createClaudeFetch({
+      accessToken: "fixed-token",
+      upstream,
+    })
+    const bodyText = JSON.stringify({ model: "claude-haiku-4-5", messages: [] })
+
+    await claudeFetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      body: new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(bodyText))
+          controller.close()
+        },
+      }),
+    })
+
+    assert.equal(forwardedBody, bodyText)
+    assert.ok(betaHeader.includes("interleaved-thinking-2025-05-14"))
+  })
+
   it("returns 401 responses after exactly one upstream call with no credential fallback", async () => {
     const originalWarn = console.warn
     let calls = 0

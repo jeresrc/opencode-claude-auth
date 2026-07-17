@@ -9,7 +9,11 @@ import {
 } from "./betas.ts"
 import { log } from "./logger.ts"
 import { config } from "./model-config.ts"
-import { transformBody, transformResponseStream } from "./transforms.ts"
+import {
+  decodeReplayableBodyText,
+  transformBody,
+  transformResponseStream,
+} from "./transforms.ts"
 
 type FetchFn = typeof fetch
 type SleepFn = (delayMs: number) => Promise<void> | void
@@ -205,9 +209,11 @@ export function buildRequestHeaders(
 }
 
 function getModelId(body: BodyInit | null | undefined): string {
-  if (typeof body !== "string") return "unknown"
+  const bodyText = decodeReplayableBodyText(body)
+  if (bodyText === undefined) return "unknown"
   try {
-    return (JSON.parse(body) as { model?: string }).model ?? "unknown"
+    const model = (JSON.parse(bodyText) as { model?: unknown }).model
+    return typeof model === "string" ? model : "unknown"
   } catch {
     return "unknown"
   }

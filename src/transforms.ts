@@ -29,6 +29,14 @@ type Message = {
   content?: string | ContentBlock[]
 }
 
+export function decodeReplayableBodyText(
+  body: BodyInit | null | undefined,
+): string | undefined {
+  if (typeof body === "string") return body
+  if (body instanceof Uint8Array) return new TextDecoder().decode(body)
+  return undefined
+}
+
 export function repairToolPairs(messages: Message[]): Message[] {
   // Collect all tool_use ids and tool_result tool_use_ids
   const toolUseIds = new Set<string>()
@@ -89,12 +97,7 @@ export function repairToolPairs(messages: Message[]): Message[] {
 export function transformBody(
   body: BodyInit | null | undefined,
 ): BodyInit | null | undefined {
-  const bodyText =
-    typeof body === "string"
-      ? body
-      : body instanceof Uint8Array
-        ? new TextDecoder().decode(body)
-        : undefined
+  const bodyText = decodeReplayableBodyText(body)
 
   if (bodyText === undefined) {
     return body

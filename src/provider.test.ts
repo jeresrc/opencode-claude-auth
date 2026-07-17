@@ -212,6 +212,43 @@ assert.equal(body.messages[0].content[0].name, "mcp_Read")
 `)
 })
 
+test("native provider detects haiku model from the Uint8Array body for beta overrides", async () => {
+  await runBun(String.raw`
+${commonImports}
+const calls = []
+const fakeFetch = async (input, init) => {
+  calls.push({
+    headers: Object.fromEntries(new Headers(init?.headers).entries()),
+    bodyText: String(init?.body),
+  })
+  return new Response(${JSON.stringify(textSse)}, {
+    headers: { "content-type": "text/event-stream" },
+  })
+}
+const selected = model("claude-haiku-4-5", {
+  apiKey: "oauth-access-token",
+  baseURL: "https://provider.test/v1",
+  fetch: fakeFetch,
+})
+const globalExecutor = Layer.succeed(RequestExecutor.Service, {
+  execute: () => Effect.die(new Error("global executor should not be used")),
+})
+await Effect.runPromise(
+  LLM.generate(LLM.request({ model: selected, prompt: "hello" })).pipe(
+    Effect.provide(LLMClient.layer.pipe(Layer.provide(globalExecutor))),
+  ),
+)
+assert.equal(calls.length, 1)
+assert.equal(JSON.parse(calls[0].bodyText).model, "claude-haiku-4-5")
+const betas = calls[0].headers["anthropic-beta"].split(",")
+assert.ok(
+  !betas.includes("interleaved-thinking-2025-05-14"),
+  calls[0].headers["anthropic-beta"],
+)
+assert.ok(betas.includes("claude-code-20250219"))
+`)
+})
+
 test("streamed mcp_ tool names are restored before AnthropicMessages parsing", async () => {
   await runBun(String.raw`
 ${commonImports}
