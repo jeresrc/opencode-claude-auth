@@ -254,6 +254,7 @@ function sanitizeErrorMessage(message: string): string {
     )
     .replace(/\bBearer\s+[A-Za-z0-9._~+/-]+/g, "Bearer REDACTED")
     .replace(/\baccess_token=([^&\s"'{};,]+)/gi, "access_token=REDACTED")
+    .replace(/("access_token"\s*:\s*")[^"]+(")/gi, "$1REDACTED$2")
     .replace(/("refresh_token"\s*:\s*")[^"]+(")/gi, "$1REDACTED$2")
     .replace(/\brefresh_token=([^&\s"'{};,]+)/gi, "refresh_token=REDACTED")
     .replace(

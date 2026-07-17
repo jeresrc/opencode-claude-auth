@@ -460,11 +460,12 @@ describe("Claude OAuth fetch pipeline", () => {
     const warnings: string[] = []
     const bearerToken = "secret-token-value"
     const accessToken = "oauth-access-secret-123"
+    const jsonAccessToken = "oauth-access-secret-JSON"
     const refreshToken = "oauth-refresh-secret-456"
     const jwt = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.payload.signature"
     const errorBody = JSON.stringify({
       error: {
-        message: `upstream OAuth failure: Bearer ${bearerToken}; access_token=${accessToken}; {"refresh_token":"${refreshToken}"}; jwt=${jwt}`,
+        message: `upstream OAuth failure: Bearer ${bearerToken}; access_token=${accessToken}; {"access_token":"${jsonAccessToken}","refresh_token":"${refreshToken}"}; jwt=${jwt}`,
       },
     })
     const upstream = (async () =>
@@ -493,7 +494,13 @@ describe("Claude OAuth fetch pipeline", () => {
 
     const warning = warnings.join("\n")
     const logOutput = logged.join("")
-    for (const secret of [bearerToken, accessToken, refreshToken, jwt]) {
+    for (const secret of [
+      bearerToken,
+      accessToken,
+      jsonAccessToken,
+      refreshToken,
+      jwt,
+    ]) {
       assert.ok(!warning.includes(secret), `warning leaked ${secret}`)
       assert.ok(!logOutput.includes(secret), `log leaked ${secret}`)
     }
