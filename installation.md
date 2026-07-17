@@ -1,98 +1,42 @@
-# Install opencode-claude-auth
+# Install opencode-claude-auth locally for OpenCode v2
 
-These instructions are designed for AI coding agents.
+These instructions are for the local branch at `/Users/jeresrc/dev/lab/opencode-claude-auth` and OpenCode v2 only.
 
-## Prerequisites
+## 1. Build the local plugin
 
-Before installing, verify you have OpenCode and Claude Code installed and authenticated.
-
-### Check OpenCode version
+From this repository:
 
 ```bash
-opencode --version
+pnpm install
+pnpm run build
 ```
 
-You should see a version number (e.g., `1.2.28`).
+## 2. Configure OpenCode v2
 
-### Check Claude Code credentials (macOS)
-
-```bash
-security find-generic-password -s "Claude Code-credentials" -w
-```
-
-If this returns credentials, you're authenticated. If it fails or returns nothing, try the fallback:
-
-### Check Claude Code credentials (fallback for all platforms)
-
-```bash
-cat ~/.claude/.credentials.json
-```
-
-If this file exists and contains valid JSON, you're authenticated.
-
-### If credentials don't exist
-
-Run Claude Code to authenticate:
-
-```bash
-claude
-```
-
-This will prompt you to log in and store credentials in Keychain (macOS) or `~/.claude/.credentials.json` (other platforms).
-
-## Installation
-
-### Step 1: Add to OpenCode configuration
-
-Edit the OpenCode configuration file at `~/.config/opencode/opencode.json`.
-
-Add `opencode-claude-auth@latest` to the `plugin` array:
+Edit your OpenCode configuration and add the local file URL to the plural `plugins` array:
 
 ```json
 {
-  "plugin": ["opencode-claude-auth@latest"]
+  "plugins": [
+    "file:///Users/jeresrc/dev/lab/opencode-claude-auth/opencode-claude-auth.js"
+  ]
 }
 ```
 
-Or run this command to do it automatically:
+## 3. Connect Anthropic in Integrations
 
-```bash
-node -e "
-const fs = require('fs'), p = require('path').join(require('os').homedir(), '.config/opencode/opencode.json');
-const c = fs.existsSync(p) ? JSON.parse(fs.readFileSync(p,'utf8')) : {};
-c.plugin = [...new Set([...(Array.isArray(c.plugin) ? c.plugin : []), 'opencode-claude-auth@latest'])];
-fs.mkdirSync(require('path').dirname(p), {recursive:true});
-fs.writeFileSync(p, JSON.stringify(c, null, 2));
-console.log('Added opencode-claude-auth@latest to', p);
-"
-```
+1. Start or restart OpenCode v2.
+2. Open **Integrations**.
+3. Choose **Anthropic**.
+4. Choose the **Claude Code credentials** method.
+5. Select the Claude Code account to use.
 
-The `@latest` tag ensures OpenCode always pulls the newest version on startup. No manual `npm install` is needed — OpenCode [automatically installs npm plugins using Bun at startup](https://opencode.ai/docs/plugins/#how-plugins-are-installed).
+The connection must remain active. There is no automatic account inference and no fallback when Anthropic is not connected through Integrations.
 
-### Step 2: Verification
+To change accounts, reconnect the Anthropic integration and select a different Claude Code account.
 
-Verify the plugin was added:
+## What this installs
 
-```bash
-cat ~/.config/opencode/opencode.json
-```
+The local v2 plugin registers an Anthropic Integration OAuth method, redirects Anthropic catalog entries to the local `file://` provider, and routes AnthropicMessages requests through the local parser and private executor/createClaudeFetch implementation. Requests use Bearer OAuth tokens, Anthropic transforms, retry handling, and SSE-safe stream transforms.
 
-You should see `opencode-claude-auth@latest` in the `plugin` array.
-
-## Upgrading
-
-If you previously installed `opencode-claude-auth` without the `@latest` tag, update your config to use `opencode-claude-auth@latest` as shown above.
-
-If the plugin isn't picking up a new version, clear the cached package and restart OpenCode:
-
-```bash
-rm -rf ~/.cache/opencode/packages/opencode-claude-auth@latest/
-```
-
-## Done
-
-The plugin is now installed and configured. When you run OpenCode, it will automatically use your Claude Code credentials — no separate login needed.
-
-## Troubleshooting
-
-If you encounter issues, see the [main README troubleshooting section](README.md#troubleshooting).
+If Anthropic requests start returning 401, reconnect Anthropic in OpenCode Integrations so OpenCode can store a fresh Integration credential.
