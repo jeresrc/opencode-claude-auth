@@ -282,14 +282,12 @@ export function refreshIfNeeded(
   const reloadSource = options.reloadSource ?? true
   const force = options.force ?? false
 
-  // Pick up external updates to .credentials.json (e.g. switch_claude_account
-  // on Windows). Bounded by getCachedCredentials's 30s TTL: fires at most
-  // ~2x/min under load. macOS keychain sources stay on the in-memory path;
-  // their state is mutated only by our own writeBackCredentials, so no
-  // external-update vector exists for them.
-  if (reloadSource && target.source === "file") {
-    const onDisk = refreshAccount(target.source)
-    if (onDisk) target.credentials = onDisk
+  // Claude Code can replace either its credentials file or a macOS Keychain
+  // item while OpenCode is running. Re-read the selected source after the
+  // 30-second cache TTL so account switches cannot leave a stale token active.
+  if (reloadSource) {
+    const current = refreshAccount(target.source)
+    if (current) target.credentials = current
   }
 
   const creds = target.credentials

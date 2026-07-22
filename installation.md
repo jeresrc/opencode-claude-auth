@@ -31,12 +31,12 @@ Edit your OpenCode configuration and add the local file URL to the plural `plugi
 4. Choose the **Claude Code credentials** method.
 5. Select the Claude Code account to use.
 
-The connection must remain active. There is no automatic account inference and no fallback when Anthropic is not connected through Integrations.
+The connection must remain active. Its metadata tells the plugin which Claude Code Keychain source to load on every OpenCode startup.
 
-To change accounts, reconnect the Anthropic integration and select a different Claude Code account.
+Reconnect the Anthropic integration only to select a different Keychain source. When `claude auth login` replaces the credentials in the selected source, restarting OpenCode reconciles and persists the new account automatically before requests begin.
 
 ## What this installs
 
 The local v2 plugin registers an Anthropic Integration OAuth method, redirects Anthropic catalog entries to the local `file://` provider, and routes AnthropicMessages requests through the local parser and private executor/createClaudeFetch implementation. Requests use Bearer OAuth tokens, Anthropic transforms, retry handling, and SSE-safe stream transforms.
 
-If Anthropic requests start returning 401, reconnect Anthropic in OpenCode Integrations so OpenCode can store a fresh Integration credential.
+If Anthropic requests return 401 immediately after an in-place Claude Code account change, restart OpenCode. Reconnect Anthropic manually if the selected Keychain source itself changed.

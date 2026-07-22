@@ -31,16 +31,17 @@ Configure OpenCode with the v2 plural `plugins` array and this file URL:
 
 Then open OpenCode v2 **Integrations**, connect **Anthropic** using the **Claude Code credentials** method, and select the Claude Code account to use.
 
-To change accounts, reconnect the Anthropic integration and select a different account. A live Integration connection is required; the plugin does not infer an account or fall back when no connection is active.
+To select a different Keychain source, reconnect the Anthropic integration and choose that account. If Claude Code replaces the credentials inside the already selected source, the plugin reconciles that account when OpenCode starts. A live Integration connection is still required; the plugin uses its metadata to identify the selected source.
 
 ## Architecture
 
-- `src/index.ts` composes the v2 plugin in this order: Integration, catalog, then session context.
-- `src/integration.ts` registers the Anthropic Integration OAuth method labeled **Claude Code credentials**. Authorization returns the selected local Claude Code OAuth credential, and refresh proactively asks OpenCode to refresh the Integration credential using the selected source.
+- `src/index.ts` composes the v2 plugin in this order: Integration, credential reconciliation, catalog, then session context.
+- `src/credential-sync.ts` compares the active Anthropic Integration credential with its selected Keychain source on startup and persists a replacement through V2's automatic OAuth connection flow when they differ.
+- `src/integration.ts` registers the Anthropic Integration OAuth method labeled **Claude Code credentials**. Authorization and refresh reread the selected local Claude Code OAuth source instead of refreshing stale persisted tokens.
 - `src/catalog.ts` redirects Anthropic catalog entries to the local provider module via a `file://` provider URL and associates them with the Anthropic Integration.
 - `src/provider.ts` exposes an AnthropicMessages provider route backed by the local parser and request executor.
 - `src/claude-fetch.ts` keeps the private executor/createClaudeFetch path: it sets `Authorization: Bearer ...`, applies Anthropic request/response transforms, handles retries for retryable Anthropic responses, and preserves SSE streaming while transforming event data at event boundaries.
-- HTTP 401 means the saved Integration credential is no longer usable; reconnect Anthropic in OpenCode Integrations.
+- On HTTP 401 after an in-place Claude Code login, restart OpenCode to reconcile the persisted Integration credential. Reconnect Anthropic manually only when selecting a different Keychain source.
 
 ## Supported models
 

@@ -140,17 +140,8 @@ export function registerAnthropicIntegration(
         try: () => {
           const source = sourceFromMetadata(credential)
           const account = selectAccount(resolvedDeps.readAccounts(), source)
-          const forcedAccount: ClaudeAccount = {
-            ...account,
-            credentials: {
-              accessToken: credential.access,
-              refreshToken: credential.refresh,
-              expiresAt: 0,
-            },
-          }
-          const refreshed = resolvedDeps.refreshIfNeeded(forcedAccount, {
-            force: true,
-            reloadSource: false,
+          const refreshed = resolvedDeps.refreshIfNeeded(account, {
+            reloadSource: true,
           })
           if (!refreshed) {
             throw new Error(

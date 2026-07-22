@@ -28,6 +28,24 @@ test("setup registers v2 plugin domains then starts rate-limit listener", async 
         order.push("integration")
         registrations.push(handler)
       },
+      reload: async () => {
+        order.push("integration:reload")
+      },
+      connection: {
+        active: async () => {
+          order.push("integration:active")
+          return undefined
+        },
+        resolve: async () => undefined,
+      },
+      oauth: {
+        connect: async () => {
+          throw new Error("unexpected connect")
+        },
+        status: async () => {
+          throw new Error("unexpected status")
+        },
+      },
     },
     catalog: {
       transform: async (handler: unknown) => {
@@ -63,6 +81,7 @@ test("setup registers v2 plugin domains then starts rate-limit listener", async 
 
   assert.deepEqual(order, [
     "integration",
+    "integration:active",
     "catalog",
     "session:context",
     "event:subscribe",

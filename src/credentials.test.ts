@@ -156,7 +156,7 @@ describe("credential caching", () => {
 
       assert.ok(first)
       assert.ok(second)
-      assert.equal(keychainModule.__getReadCount(), 0)
+      assert.equal(keychainModule.__getReadCount(), 1)
     } finally {
       Date.now = originalNow
     }
@@ -168,9 +168,8 @@ describe("credential caching", () => {
     Date.now = () => now
 
     try {
-      const { credentialsModule } = await loadCredentialsWithCountingKeychain(
-        now + 10 * 60_000,
-      )
+      const { credentialsModule, keychainModule } =
+        await loadCredentialsWithCountingKeychain(now + 10 * 60_000)
 
       credentialsModule.initAccounts([
         {
@@ -187,11 +186,17 @@ describe("credential caching", () => {
       const first = credentialsModule.getCachedCredentials()
       assert.ok(first)
 
+      keychainModule.__setCredentials({
+        accessToken: "switched-token",
+        refreshToken: "switched-refresh",
+        expiresAt: now + 10 * 60_000,
+      })
       now += 31_000
 
       const second = credentialsModule.getCachedCredentials()
       assert.ok(second)
-      assert.equal(second.accessToken, "token")
+      assert.equal(second.accessToken, "switched-token")
+      assert.equal(keychainModule.__getReadCount(), 2)
     } finally {
       Date.now = originalNow
     }
@@ -286,7 +291,7 @@ describe("credential caching", () => {
     }
   })
 
-  it("refreshIfNeeded reloads file-source credentials from disk on every call", async () => {
+  it("refreshIfNeeded reloads externally changed credentials from any source", async () => {
     const originalNow = Date.now
     const now = 1_700_000_000_000
     Date.now = () => now
@@ -297,7 +302,7 @@ describe("credential caching", () => {
 
       const account = {
         label: "Account 1",
-        source: "file",
+        source: "keychain",
         credentials: {
           accessToken: "old-token",
           refreshToken: "old-refresh",
@@ -305,7 +310,8 @@ describe("credential caching", () => {
         },
       }
 
-      // External writer (e.g. switch_claude_account) replaces .credentials.json
+      // External writers include `claude auth login` replacing a macOS
+      // Keychain item while OpenCode is still running.
       keychainModule.__setCredentials({
         accessToken: "new-token",
         refreshToken: "new-refresh",
@@ -318,7 +324,7 @@ describe("credential caching", () => {
       assert.equal(
         result.accessToken,
         "new-token",
-        "should return on-disk creds, not the stale in-memory copy",
+        "should return source creds, not the stale in-memory copy",
       )
       assert.equal(
         account.credentials.accessToken,
@@ -330,7 +336,7 @@ describe("credential caching", () => {
     }
   })
 
-  it("refreshIfNeeded skips OAuth refresh writeback when on-disk file source is fresh", async () => {
+  it("refreshIfNeeded skips OAuth refresh writeback when the source is already fresh", async () => {
     const originalNow = Date.now
     const now = 1_700_000_000_000
     Date.now = () => now
@@ -343,7 +349,7 @@ describe("credential caching", () => {
       // trigger the OAuth-refresh + writeBackCredentials path).
       const account = {
         label: "Account 1",
-        source: "file",
+        source: "keychain",
         credentials: {
           accessToken: "stale-token",
           refreshToken: "stale-refresh",
@@ -374,7 +380,7 @@ describe("credential caching", () => {
     }
   })
 
-  it("refreshIfNeeded can skip file-source reload when caller supplies current credentials", async () => {
+  it("refreshIfNeeded can skip source reload when caller supplies current credentials", async () => {
     const originalNow = Date.now
     const now = 1_700_000_000_000
     Date.now = () => now
@@ -385,7 +391,7 @@ describe("credential caching", () => {
 
       const account = {
         label: "Account 1",
-        source: "file",
+        source: "keychain",
         credentials: {
           accessToken: "current-access",
           refreshToken: "current-refresh",

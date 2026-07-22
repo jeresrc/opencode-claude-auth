@@ -216,7 +216,7 @@ describe("Anthropic integration registration", () => {
     )
   })
 
-  it("refresh uses the active OAuth credential when stored account credentials are stale", async () => {
+  it("refresh reloads the selected account instead of reusing a stale stored credential", async () => {
     const { draft, registration } = createDraft()
     const original: ClaudeAccount = {
       source: "file",
@@ -255,12 +255,12 @@ describe("Anthropic integration registration", () => {
     )
 
     assert.ok(refreshAccount)
-    assert.notEqual(refreshAccount, original)
+    assert.equal(refreshAccount, original)
     assert.equal(refreshAccount.source, "file")
-    assert.equal(refreshAccount.credentials.accessToken, "access-current")
-    assert.equal(refreshAccount.credentials.refreshToken, "refresh-current")
-    assert.equal(refreshAccount.credentials.expiresAt, 0)
-    assert.deepEqual(refreshOptions, { force: true, reloadSource: false })
+    assert.equal(refreshAccount.credentials.accessToken, "access-stale")
+    assert.equal(refreshAccount.credentials.refreshToken, "refresh-stale")
+    assert.equal(refreshAccount.credentials.expiresAt, 1_700_000_900_000)
+    assert.deepEqual(refreshOptions, { reloadSource: true })
     assert.deepEqual(refreshed, {
       type: "oauth",
       methodID: CLAUDE_CODE_METHOD_ID,
