@@ -79,8 +79,7 @@ export function repairToolPairs(messages: Message[]): Message[] {
         const toolUseId = block["tool_use_id"]
         if (block.type === "tool_result" && typeof toolUseId === "string") {
           return (
-            isAdjacentPair(toolUseId) &&
-            resultMsgIndex.get(toolUseId) === index
+            isAdjacentPair(toolUseId) && resultMsgIndex.get(toolUseId) === index
           )
         }
 
