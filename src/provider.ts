@@ -11,6 +11,10 @@ import type {
 import { Effect, Layer, Stream } from "effect"
 import { FetchHttpClient } from "effect/unstable/http"
 import { createClaudeFetch } from "./claude-fetch.ts"
+import {
+  forceRefreshPrimaryCredentials,
+  reloadPrimaryCredentials,
+} from "./credentials.ts"
 
 type RouteRuntime = typeof import("@opencode-ai/ai/route")
 type AnthropicMessagesRuntime =
@@ -61,7 +65,14 @@ function executorLayer(accessToken: string, upstream?: FetchFn) {
     Layer.provide(
       Layer.succeed(
         FetchHttpClient.Fetch,
-        createClaudeFetch({ accessToken, upstream }),
+        createClaudeFetch({
+          accessToken,
+          upstream,
+          authRecovery: {
+            reload: reloadPrimaryCredentials,
+            refresh: forceRefreshPrimaryCredentials,
+          },
+        }),
       ),
     ),
   )

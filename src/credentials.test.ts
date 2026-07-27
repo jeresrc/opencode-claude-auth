@@ -19,6 +19,11 @@ async function loadCredentialsWithCountingKeychain(
   credentialsModule: {
     getCachedCredentials: () => Creds | null
     getCredentialsForSync: () => Creds | null
+    reloadPrimaryCredentials: () => Creds | null
+    forceRefreshPrimaryCredentials: (
+      refresh?: (refreshToken: string) => Creds | null,
+    ) => Creds | null
+    invalidateCredentialCache: () => void
     refreshIfNeeded: (
       account?: {
         label: string
@@ -123,6 +128,11 @@ export function __setCredentials(c) {
     credentialsModule: credentialsModule as {
       getCachedCredentials: () => Creds | null
       getCredentialsForSync: () => Creds | null
+      reloadPrimaryCredentials: () => Creds | null
+      forceRefreshPrimaryCredentials: (
+        refresh?: (refreshToken: string) => Creds | null,
+      ) => Creds | null
+      invalidateCredentialCache: () => void
       refreshIfNeeded: (
         account?: {
           label: string
@@ -625,6 +635,78 @@ describe("credential caching", () => {
       assert.deepEqual(refreshTokens, ["new-refresh-token"])
       assert.equal(keychainModule.__getWriteCount(), 1)
       cleanup()
+    } finally {
+      Date.now = originalNow
+    }
+  })
+
+  it("reloadPrimaryCredentials picks up externally rotated primary credentials", async () => {
+    const now = Date.now()
+    const { credentialsModule, keychainModule } =
+      await loadCredentialsWithCountingKeychain(now + 10 * 60_000)
+    const account = {
+      label: "Claude",
+      source: "Claude Code-credentials",
+      credentials: {
+        accessToken: "old-token",
+        refreshToken: "old-refresh",
+        expiresAt: now + 10 * 60_000,
+      },
+    }
+    credentialsModule.initAccounts([account])
+
+    keychainModule.__setCredentials({
+      accessToken: "rotated-token",
+      refreshToken: "rotated-refresh",
+      expiresAt: now + 10 * 60_000,
+    })
+
+    const result = credentialsModule.reloadPrimaryCredentials()
+
+    assert.ok(result)
+    assert.equal(result.accessToken, "rotated-token")
+    assert.equal(account.credentials.accessToken, "rotated-token")
+  })
+
+  it("forceRefreshPrimaryCredentials writes back and primes the cache", async () => {
+    const originalNow = Date.now
+    const now = 1_700_000_000_000
+    Date.now = () => now
+
+    try {
+      const { credentialsModule, keychainModule } =
+        await loadCredentialsWithCountingKeychain(now + 10 * 60_000)
+      const account = {
+        label: "Claude",
+        source: "Claude Code-credentials",
+        credentials: {
+          accessToken: "rejected-token",
+          refreshToken: "refresh-token",
+          expiresAt: now + 10 * 60_000,
+        },
+      }
+      credentialsModule.initAccounts([account])
+      const newCreds = {
+        accessToken: "oauth-refreshed-token",
+        refreshToken: "oauth-refreshed-refresh",
+        expiresAt: now + 10 * 60 * 60_000,
+      }
+
+      const result = credentialsModule.forceRefreshPrimaryCredentials(
+        (token) => {
+          assert.equal(token, "refresh-token")
+          return newCreds
+        },
+      )
+
+      assert.ok(result)
+      assert.equal(result.accessToken, "oauth-refreshed-token")
+      assert.equal(account.credentials.accessToken, "oauth-refreshed-token")
+      assert.equal(keychainModule.__getWriteCount(), 1)
+      assert.equal(
+        credentialsModule.getCachedCredentials()?.accessToken,
+        "oauth-refreshed-token",
+      )
     } finally {
       Date.now = originalNow
     }

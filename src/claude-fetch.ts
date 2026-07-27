@@ -10,6 +10,7 @@ import {
 } from "./betas.ts"
 import { log } from "./logger.ts"
 import { config } from "./model-config.ts"
+import type { ClaudeCredentials } from "./credentials.ts"
 import {
   decodeReplayableBodyText,
   transformBody,
@@ -24,6 +25,10 @@ export type ClaudeFetchOptions = {
   upstream?: FetchFn
   sleep?: SleepFn
   retries?: number
+  authRecovery?: {
+    reload: () => ClaudeCredentials | null
+    refresh: () => ClaudeCredentials | null
+  }
 }
 
 function getCliVersion(): string {
@@ -227,7 +232,7 @@ async function getRequestBody(
 ): Promise<BodyInit | null | undefined> {
   if (typeof init.body !== "undefined") return init.body
   if (!(input instanceof Request) || !input.body) return init.body
-  return input.clone().text()
+  return input.body
 }
 
 function warnOnErrorResponse(response: Response, modelId: string): void {
@@ -285,20 +290,22 @@ export function createClaudeFetch(options: ClaudeFetchOptions): FetchFn {
     const originalBody = await getRequestBody(input, requestInit)
     const modelId = getModelId(originalBody)
     const requestUrl = buildRequestUrl(input)
-    const excluded = getExcludedBetas(modelId)
-    const headers = buildRequestHeaders(
-      input,
-      requestInit,
-      options.accessToken,
-      modelId,
-      excluded,
-    )
     const body = transformBody(originalBody)
-    const isReplayable = isReplayableBody(body)
+    const isReplayable =
+      isReplayableRequest(input, requestInit) && isReplayableBody(body)
     const effectiveRetries = isReplayable ? retries : 1
     const method =
       requestInit.method ??
       (input instanceof Request ? input.method : undefined)
+
+    let activeAccessToken = options.accessToken
+    let headers = buildRequestHeaders(
+      input,
+      requestInit,
+      activeAccessToken,
+      modelId,
+      getExcludedBetas(modelId),
+    )
 
     const headerKeys: string[] = []
     headers.forEach((_, key) => headerKeys.push(key))
@@ -307,15 +314,56 @@ export function createClaudeFetch(options: ClaudeFetchOptions): FetchFn {
       .filter(Boolean)
     log("fetch_headers_built", { headerKeys, betas, modelId })
 
-    let response = await fetchWithRetry(
-      requestUrl,
-      { ...requestInit, method, body, headers },
-      effectiveRetries,
-      upstream,
-      sleep,
-    )
+    const send = async (accessToken: string): Promise<Response> => {
+      headers = buildRequestHeaders(
+        input,
+        requestInit,
+        accessToken,
+        modelId,
+        getExcludedBetas(modelId),
+      )
+      const retryInit = {
+        ...requestInit,
+        method,
+        body,
+        headers,
+      } as RequestInit & {
+        duplex?: "half"
+      }
+      if (body instanceof ReadableStream && !("duplex" in retryInit)) {
+        retryInit.duplex = "half"
+      }
+
+      return await fetchWithRetry(
+        requestUrl,
+        retryInit,
+        effectiveRetries,
+        upstream,
+        sleep,
+      )
+    }
+
+    let response = await send(activeAccessToken)
 
     log("fetch_response", { status: response.status, modelId, retryAttempt: 0 })
+
+    if (response.status === 401 && isReplayable && options.authRecovery) {
+      const reloaded = options.authRecovery.reload()
+      const retryCreds =
+        reloaded && reloaded.accessToken !== activeAccessToken
+          ? reloaded
+          : options.authRecovery.refresh()
+
+      if (retryCreds && retryCreds.accessToken !== activeAccessToken) {
+        activeAccessToken = retryCreds.accessToken
+        response = await send(activeAccessToken)
+        log("fetch_response", {
+          status: response.status,
+          modelId,
+          retryAttempt: 1,
+        })
+      }
+    }
 
     for (let attempt = 0; attempt < LONG_CONTEXT_BETAS.length; attempt++) {
       if (!isReplayable) break
@@ -333,7 +381,7 @@ export function createClaudeFetch(options: ClaudeFetchOptions): FetchFn {
       const retryHeaders = buildRequestHeaders(
         input,
         requestInit,
-        options.accessToken,
+        activeAccessToken,
         modelId,
         getExcludedBetas(modelId),
       )

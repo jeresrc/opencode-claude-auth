@@ -321,6 +321,239 @@ describe("Claude OAuth fetch pipeline", () => {
     }
   })
 
+  it("retries a 401 once with a reloaded primary token when it rotated externally", async () => {
+    let calls = 0
+    const authHeaders: string[] = []
+    const upstream = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      calls += 1
+      authHeaders.push(new Headers(init?.headers).get("authorization") ?? "")
+      return new Response(calls === 1 ? "unauthorized" : "ok", {
+        status: calls === 1 ? 401 : 200,
+      })
+    }) as typeof fetch
+
+    const claudeFetch = createClaudeFetch({
+      accessToken: "old-token",
+      upstream,
+      retries: 1,
+      authRecovery: {
+        reload: () => ({
+          accessToken: "rotated-token",
+          refreshToken: "rotated-refresh",
+          expiresAt: Date.now() + 10 * 60_000,
+        }),
+        refresh: () => {
+          throw new Error("refresh must not run after external rotation")
+        },
+      },
+    })
+
+    const response = await claudeFetch(
+      "https://api.anthropic.com/v1/messages",
+      {
+        method: "POST",
+        body: JSON.stringify({ model: "claude-sonnet-4-6", messages: [] }),
+      },
+    )
+
+    assert.equal(response.status, 200)
+    assert.equal(calls, 2)
+    assert.deepEqual(authHeaders, ["Bearer old-token", "Bearer rotated-token"])
+  })
+
+  it("falls back to one OAuth refresh on 401 when reload returns the rejected token", async () => {
+    let calls = 0
+    const authHeaders: string[] = []
+    const upstream = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      calls += 1
+      authHeaders.push(new Headers(init?.headers).get("authorization") ?? "")
+      return new Response(calls === 1 ? "unauthorized" : "ok", {
+        status: calls === 1 ? 401 : 200,
+      })
+    }) as typeof fetch
+
+    const claudeFetch = createClaudeFetch({
+      accessToken: "rejected-token",
+      upstream,
+      retries: 1,
+      authRecovery: {
+        reload: () => ({
+          accessToken: "rejected-token",
+          refreshToken: "refresh-token",
+          expiresAt: Date.now() + 10 * 60_000,
+        }),
+        refresh: () => ({
+          accessToken: "oauth-refreshed-token",
+          refreshToken: "new-refresh",
+          expiresAt: Date.now() + 10 * 60_000,
+        }),
+      },
+    })
+
+    const response = await claudeFetch(
+      "https://api.anthropic.com/v1/messages",
+      {
+        method: "POST",
+        body: JSON.stringify({ model: "claude-sonnet-4-6", messages: [] }),
+      },
+    )
+
+    assert.equal(response.status, 200)
+    assert.equal(calls, 2)
+    assert.deepEqual(authHeaders, [
+      "Bearer rejected-token",
+      "Bearer oauth-refreshed-token",
+    ])
+  })
+
+  it("does not loop when the retry also returns 401", async () => {
+    let calls = 0
+    const upstream = (async () => {
+      calls += 1
+      return new Response("unauthorized", { status: 401 })
+    }) as typeof fetch
+    const claudeFetch = createClaudeFetch({
+      accessToken: "rejected-token",
+      upstream,
+      retries: 1,
+      authRecovery: {
+        reload: () => ({
+          accessToken: "rotated-token",
+          refreshToken: "rotated-refresh",
+          expiresAt: Date.now() + 10 * 60_000,
+        }),
+        refresh: () => null,
+      },
+    })
+
+    const response = await claudeFetch(
+      "https://api.anthropic.com/v1/messages",
+      {
+        method: "POST",
+        body: JSON.stringify({ model: "claude-sonnet-4-6", messages: [] }),
+      },
+    )
+
+    assert.equal(response.status, 401)
+    assert.equal(await response.text(), "unauthorized")
+    assert.equal(calls, 2)
+  })
+
+  it("does not retry 401 recovery for a consumed one-shot request body", async () => {
+    let calls = 0
+    let recoveryCalls = 0
+    let forwardedBody = ""
+    const upstream = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      calls += 1
+      assert.ok(init?.body instanceof ReadableStream)
+      forwardedBody = await new Response(init.body).text()
+      return new Response("unauthorized", { status: 401 })
+    }) as typeof fetch
+    const claudeFetch = createClaudeFetch({
+      accessToken: "rejected-token",
+      upstream,
+      retries: 3,
+      authRecovery: {
+        reload: () => {
+          recoveryCalls += 1
+          return {
+            accessToken: "rotated-token",
+            refreshToken: "rotated-refresh",
+            expiresAt: Date.now() + 10 * 60_000,
+          }
+        },
+        refresh: () => {
+          recoveryCalls += 1
+          return {
+            accessToken: "oauth-refreshed-token",
+            refreshToken: "new-refresh",
+            expiresAt: Date.now() + 10 * 60_000,
+          }
+        },
+      },
+    })
+    const bodyText = JSON.stringify({
+      model: "claude-sonnet-4-6",
+      messages: [],
+    })
+
+    const response = await claudeFetch(
+      "https://api.anthropic.com/v1/messages",
+      {
+        method: "POST",
+        body: new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode(bodyText))
+            controller.close()
+          },
+        }),
+      },
+    )
+
+    assert.equal(response.status, 401)
+    assert.equal(await response.text(), "unauthorized")
+    assert.equal(calls, 1)
+    assert.equal(recoveryCalls, 0)
+    assert.equal(forwardedBody, bodyText)
+  })
+
+  it("does not consume or retry 401 recovery for a Request stream body", async () => {
+    let calls = 0
+    let recoveryCalls = 0
+    let forwardedBody = ""
+    const upstream = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      calls += 1
+      assert.ok(init?.body instanceof ReadableStream)
+      forwardedBody = await new Response(init.body).text()
+      return new Response("unauthorized", { status: 401 })
+    }) as typeof fetch
+    const claudeFetch = createClaudeFetch({
+      accessToken: "rejected-token",
+      upstream,
+      retries: 3,
+      authRecovery: {
+        reload: () => {
+          recoveryCalls += 1
+          return {
+            accessToken: "rotated-token",
+            refreshToken: "rotated-refresh",
+            expiresAt: Date.now() + 10 * 60_000,
+          }
+        },
+        refresh: () => {
+          recoveryCalls += 1
+          return {
+            accessToken: "oauth-refreshed-token",
+            refreshToken: "new-refresh",
+            expiresAt: Date.now() + 10 * 60_000,
+          }
+        },
+      },
+    })
+    const bodyText = JSON.stringify({
+      model: "claude-sonnet-4-6",
+      messages: [],
+    })
+    const request = new Request("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      body: new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(bodyText))
+          controller.close()
+        },
+      }),
+      duplex: "half",
+    })
+
+    const response = await claudeFetch(request)
+
+    assert.equal(response.status, 401)
+    assert.equal(await response.text(), "unauthorized")
+    assert.equal(calls, 1)
+    assert.equal(recoveryCalls, 0)
+    assert.equal(forwardedBody, bodyText)
+  })
+
   it("retries 429 and 529 responses using the injected sleeper", async () => {
     const statuses = [429, 529, 200]
     const slept: number[] = []

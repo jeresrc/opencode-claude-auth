@@ -420,6 +420,61 @@ export function getCredentialsForSync(): ClaudeCredentials | null {
   return null
 }
 
+export function invalidateCredentialCache(): void {
+  const account = getActiveAccount()
+  if (!account) return
+  accountCacheMap.delete(account.source)
+  log("cache_invalidated", { source: account.source })
+}
+
+export function reloadPrimaryCredentials(): ClaudeCredentials | null {
+  const account = getActiveAccount()
+  if (!account) return null
+  try {
+    const fresh = refreshAccount(account.source)
+    if (!fresh) return null
+    account.credentials = fresh
+    accountCacheMap.set(account.source, { creds: fresh, cachedAt: Date.now() })
+    return fresh
+  } catch (err) {
+    log("primary_reload_failed", {
+      source: account.source,
+      error: err instanceof Error ? err.name : "unknown",
+    })
+    return null
+  }
+}
+
+export function forceRefreshPrimaryCredentials(
+  refresh: (refreshToken: string) => ClaudeCredentials | null = refreshViaOAuth,
+): ClaudeCredentials | null {
+  const account = getActiveAccount()
+  if (!account?.credentials.refreshToken) return null
+
+  let oauthCreds: ClaudeCredentials | null
+  try {
+    oauthCreds = refresh(account.credentials.refreshToken)
+  } catch {
+    log("force_refresh_failed", { source: account.source })
+    return null
+  }
+
+  if (!oauthCreds || oauthCreds.expiresAt <= Date.now() + 60_000) {
+    log("force_refresh_failed", { source: account.source })
+    return null
+  }
+
+  account.credentials = oauthCreds
+  if (!writeBackCredentials(account.source, oauthCreds)) {
+    log("force_refresh_writeback_failed", { source: account.source })
+  }
+  accountCacheMap.set(account.source, {
+    creds: oauthCreds,
+    cachedAt: Date.now(),
+  })
+  return oauthCreds
+}
+
 export function getCachedCredentials(): ClaudeCredentials | null {
   const account = getActiveAccount()
   if (!account) return null
