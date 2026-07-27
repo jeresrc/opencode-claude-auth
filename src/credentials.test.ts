@@ -16,7 +16,12 @@ type Creds = {
 
 async function loadCredentialsWithCountingKeychain(
   initialExpiresAt: number,
-  options: { writeBackResult?: boolean; writeBackThrows?: boolean } = {},
+  options: {
+    writeBackResult?: boolean
+    writeBackThrows?: boolean
+    oauthRefreshCredentials?: Creds | null
+    oauthRefreshThrows?: boolean
+  } = {},
 ): Promise<{
   credentialsModule: {
     getCachedCredentials: () => Creds | null
@@ -53,6 +58,9 @@ async function loadCredentialsWithCountingKeychain(
     __getWriteCount: () => number
     __setCredentials: (c: Creds) => void
   }
+  loggerModule: {
+    __getLogs: () => Array<{ event: string; data: Record<string, unknown> }>
+  }
 }> {
   const writeBackResult = options.writeBackResult ?? true
   const writeBackThrows = options.writeBackThrows ?? false
@@ -65,14 +73,29 @@ async function loadCredentialsWithCountingKeychain(
     new URL("./credentials.ts", import.meta.url),
     "utf8",
   )
-  const rewritten = sourceCredentials.replace(
+  let rewritten = sourceCredentials.replace(
     /from\s+["']\.\/(\w+)\.js["']/g,
     'from "./$1.ts"',
   )
+  if (
+    Object.hasOwn(options, "oauthRefreshCredentials") ||
+    options.oauthRefreshThrows
+  ) {
+    const oauthCreds = JSON.stringify(options.oauthRefreshCredentials ?? null)
+    rewritten = rewritten.replace(
+      /export function refreshViaOAuth\([\s\S]*?\n}\n\nfunction persistRefreshedCredentials/,
+      `export function refreshViaOAuth(\n  refreshToken: string,\n): ClaudeCredentials | null {\n  if (${options.oauthRefreshThrows ?? false}) throw new Error("oauth refresh failed")\n  return ${oauthCreds}\n}\n\nfunction persistRefreshedCredentials`,
+    )
+  }
 
   await writeFile(
     tempLogger,
-    `export function log() {}\nexport function initLogger() {}\nexport function closeLogger() {}\n`,
+    `const logs = []
+export function log(event, data = {}) { logs.push({ event, data }) }
+export function __getLogs() { return logs }
+export function initLogger() {}
+export function closeLogger() {}
+`,
     "utf8",
   )
 
@@ -124,9 +147,10 @@ export function __setCredentials(c) {
   )
   await writeFile(tempCredentials, rewritten, "utf8")
 
-  const [credentialsModule, keychainModule] = await Promise.all([
+  const [credentialsModule, keychainModule, loggerModule] = await Promise.all([
     import(pathToFileURL(tempCredentials).href),
     import(pathToFileURL(tempKeychain).href),
+    import(pathToFileURL(tempLogger).href),
   ])
 
   return {
@@ -164,6 +188,12 @@ export function __setCredentials(c) {
       __getReadCount: () => number
       __getWriteCount: () => number
       __setCredentials: (c: Creds) => void
+    },
+    loggerModule: loggerModule as {
+      __getLogs: () => Array<{
+        event: string
+        data: Record<string, unknown>
+      }>
     },
   }
 }
@@ -457,6 +487,99 @@ describe("credential caching", () => {
     }
   })
 
+  it("refreshIfNeeded does not mutate or succeed when OAuth writeback returns false", async () => {
+    const originalNow = Date.now
+    const now = 1_700_000_000_000
+    Date.now = () => now
+
+    try {
+      const oldCreds = {
+        accessToken: "old-token",
+        refreshToken: "old-refresh",
+        expiresAt: now + 30_000,
+      }
+      const newCreds = {
+        accessToken: "oauth-refreshed-token",
+        refreshToken: "oauth-refreshed-refresh",
+        expiresAt: now + 10 * 60 * 60_000,
+      }
+      const { credentialsModule, keychainModule, loggerModule } =
+        await loadCredentialsWithCountingKeychain(now + 30_000, {
+          writeBackResult: false,
+          oauthRefreshCredentials: newCreds,
+        })
+      const account = {
+        label: "Account 1",
+        source: "keychain",
+        credentials: { ...oldCreds },
+      }
+
+      const result = credentialsModule.refreshIfNeeded(account, {
+        reloadSource: false,
+      })
+
+      assert.equal(result, null)
+      assert.equal(keychainModule.__getWriteCount(), 1)
+      assert.deepEqual(account.credentials, oldCreds)
+      const logs = loggerModule.__getLogs()
+      assert.ok(
+        logs.some((entry) => entry.event === "refresh_writeback_failed"),
+      )
+      assert.ok(!JSON.stringify(logs).includes("oauth-refreshed-token"))
+      assert.ok(!JSON.stringify(logs).includes("oauth-refreshed-refresh"))
+    } finally {
+      Date.now = originalNow
+    }
+  })
+
+  it("refreshIfNeeded does not mutate or throw when OAuth writeback throws", async () => {
+    const originalNow = Date.now
+    const now = 1_700_000_000_000
+    Date.now = () => now
+
+    try {
+      const oldCreds = {
+        accessToken: "old-token",
+        refreshToken: "old-refresh",
+        expiresAt: now + 30_000,
+      }
+      const newCreds = {
+        accessToken: "oauth-refreshed-token",
+        refreshToken: "oauth-refreshed-refresh",
+        expiresAt: now + 10 * 60 * 60_000,
+      }
+      const { credentialsModule, keychainModule, loggerModule } =
+        await loadCredentialsWithCountingKeychain(now + 30_000, {
+          writeBackThrows: true,
+          oauthRefreshCredentials: newCreds,
+        })
+      const account = {
+        label: "Account 1",
+        source: "keychain",
+        credentials: { ...oldCreds },
+      }
+
+      let result: Creds | null | undefined
+      assert.doesNotThrow(() => {
+        result = credentialsModule.refreshIfNeeded(account, {
+          reloadSource: false,
+        })
+      })
+
+      assert.equal(result, null)
+      assert.equal(keychainModule.__getWriteCount(), 1)
+      assert.deepEqual(account.credentials, oldCreds)
+      const logs = loggerModule.__getLogs()
+      assert.ok(
+        logs.some((entry) => entry.event === "refresh_writeback_failed"),
+      )
+      assert.ok(!JSON.stringify(logs).includes("oauth-refreshed-token"))
+      assert.ok(!JSON.stringify(logs).includes("oauth-refreshed-refresh"))
+    } finally {
+      Date.now = originalNow
+    }
+  })
+
   it("startProactiveRefresh refreshes at startup when primary credentials expire within one hour", async () => {
     const originalNow = Date.now
     const now = 1_700_000_000_000
@@ -502,6 +625,106 @@ describe("credential caching", () => {
         credentialsModule.PROACTIVE_REFRESH_INTERVAL_MS,
       ])
       assert.equal(callbacks.length, 1)
+      cleanup()
+    } finally {
+      Date.now = originalNow
+    }
+  })
+
+  it("startProactiveRefresh leaves old state intact when injected refresh writeback returns false", async () => {
+    const originalNow = Date.now
+    const now = 1_700_000_000_000
+    Date.now = () => now
+
+    try {
+      const oldCreds = {
+        accessToken: "old-token",
+        refreshToken: "old-refresh",
+        expiresAt: now + 30 * 60_000,
+      }
+      const newCreds = {
+        accessToken: "oauth-refreshed-token",
+        refreshToken: "oauth-refreshed-refresh",
+        expiresAt: now + 10 * 60 * 60_000,
+      }
+      const { credentialsModule, keychainModule, loggerModule } =
+        await loadCredentialsWithCountingKeychain(now + 30 * 60_000, {
+          writeBackResult: false,
+        })
+      keychainModule.__setCredentials(oldCreds)
+
+      const cleanup = credentialsModule.startProactiveRefresh({
+        setInterval: (() => "timer-id" as never) as typeof setInterval,
+        clearInterval: (() => undefined) as typeof clearInterval,
+        now: () => now,
+        refresh: () => newCreds,
+      })
+
+      const current = credentialsModule.getCredentialsForSync()
+      assert.ok(current)
+      assert.equal(current.accessToken, "old-token")
+      assert.equal(keychainModule.__getWriteCount(), 1)
+      const logs = loggerModule.__getLogs()
+      assert.ok(
+        logs.some(
+          (entry) => entry.event === "proactive_refresh_writeback_failed",
+        ),
+      )
+      assert.ok(
+        logs.some((entry) => entry.event === "proactive_refresh_failed"),
+      )
+      assert.ok(!JSON.stringify(logs).includes("oauth-refreshed-token"))
+      assert.ok(!JSON.stringify(logs).includes("oauth-refreshed-refresh"))
+      cleanup()
+    } finally {
+      Date.now = originalNow
+    }
+  })
+
+  it("startProactiveRefresh leaves old state intact when injected refresh writeback throws", async () => {
+    const originalNow = Date.now
+    const now = 1_700_000_000_000
+    Date.now = () => now
+
+    try {
+      const oldCreds = {
+        accessToken: "old-token",
+        refreshToken: "old-refresh",
+        expiresAt: now + 30 * 60_000,
+      }
+      const newCreds = {
+        accessToken: "oauth-refreshed-token",
+        refreshToken: "oauth-refreshed-refresh",
+        expiresAt: now + 10 * 60 * 60_000,
+      }
+      const { credentialsModule, keychainModule, loggerModule } =
+        await loadCredentialsWithCountingKeychain(now + 30 * 60_000, {
+          writeBackThrows: true,
+        })
+      keychainModule.__setCredentials(oldCreds)
+
+      const cleanup = credentialsModule.startProactiveRefresh({
+        setInterval: (() => "timer-id" as never) as typeof setInterval,
+        clearInterval: (() => undefined) as typeof clearInterval,
+        now: () => now,
+        refresh: () => newCreds,
+      })
+
+      const current = credentialsModule.getCredentialsForSync()
+      assert.ok(current)
+      assert.equal(current.accessToken, "old-token")
+      assert.equal(keychainModule.__getWriteCount(), 1)
+      const logs = loggerModule.__getLogs()
+      assert.ok(
+        logs.some(
+          (entry) => entry.event === "proactive_refresh_writeback_failed",
+        ),
+      )
+      assert.ok(
+        logs.some((entry) => entry.event === "proactive_refresh_failed"),
+      )
+      assert.ok(!JSON.stringify(logs).includes("oauth-refreshed-token"))
+      assert.ok(!JSON.stringify(logs).includes("oauth-refreshed-refresh"))
       cleanup()
     } finally {
       Date.now = originalNow

@@ -250,6 +250,25 @@ export function refreshViaOAuth(
   }
 }
 
+function persistRefreshedCredentials(
+  source: string,
+  creds: ClaudeCredentials,
+  failureEvent: string,
+): boolean {
+  try {
+    const wroteBack = writeBackCredentials(source, creds)
+    if (wroteBack) return true
+    log(failureEvent, { source })
+    return false
+  } catch (err) {
+    log(failureEvent, {
+      source,
+      error: err instanceof Error ? err.name : typeof err,
+    })
+    return false
+  }
+}
+
 function refreshViaCli(): void {
   const maxAttempts = 2
   for (let i = 0; i < maxAttempts; i++) {
@@ -307,8 +326,16 @@ export function refreshIfNeeded(
   if (creds.refreshToken) {
     const oauthCreds = refreshViaOAuth(creds.refreshToken)
     if (oauthCreds && oauthCreds.expiresAt > Date.now() + 60_000) {
+      if (
+        !persistRefreshedCredentials(
+          target.source,
+          oauthCreds,
+          "refresh_writeback_failed",
+        )
+      ) {
+        return null
+      }
       target.credentials = oauthCreds
-      writeBackCredentials(target.source, oauthCreds)
       return oauthCreds
     }
   }
@@ -358,9 +385,17 @@ export function startProactiveRefresh(
       if (options.refresh && account.credentials.refreshToken) {
         const forced = options.refresh(account.credentials.refreshToken)
         if (forced && forced.expiresAt > now() + 60_000) {
-          account.credentials = forced
-          writeBackCredentials(account.source, forced)
-          refreshed = forced
+          const wroteBack = persistRefreshedCredentials(
+            account.source,
+            forced,
+            "proactive_refresh_writeback_failed",
+          )
+          if (!wroteBack) {
+            refreshed = null
+          } else {
+            account.credentials = forced
+            refreshed = forced
+          }
         }
       } else {
         refreshed = refreshIfNeeded(account, {
@@ -389,6 +424,8 @@ export function startProactiveRefresh(
     }
   }
 
+  // Startup refresh is intentionally synchronous so setup publishes durable
+  // credentials before the first request can use them.
   refresh()
   const timer = setTimer(refresh, PROACTIVE_REFRESH_INTERVAL_MS)
   const maybeUnref = timer as { unref?: () => void }
