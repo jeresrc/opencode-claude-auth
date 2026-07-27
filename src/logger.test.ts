@@ -183,6 +183,18 @@ describe("redact", () => {
     assert.equal(result.someToken, "eyJhbGci...REDACTED")
   })
 
+  it("redacts token-like strings in error messages", () => {
+    const result = redact({
+      error:
+        "failed with Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.payload.signature and refresh_token=secret-refresh",
+    })
+
+    assert.equal(
+      result.error,
+      "failed with Bearer JWT_REDACTED and refresh_token=REDACTED",
+    )
+  })
+
   it("preserves non-sensitive fields", () => {
     const result = redact({
       expiresAt: 1742860800000,

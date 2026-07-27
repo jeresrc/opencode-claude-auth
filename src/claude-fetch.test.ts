@@ -321,6 +321,65 @@ describe("Claude OAuth fetch pipeline", () => {
     }
   })
 
+  it("does not leak rejected tokens or raw 401 bodies during auth recovery", async () => {
+    const logged: string[] = []
+    initLogger({
+      stream: {
+        write(chunk: string) {
+          logged.push(chunk)
+          return true
+        },
+      } as never,
+    })
+
+    const originalWarn = console.warn
+    const warnings: unknown[][] = []
+    const rejectedToken =
+      "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.rejected.signature"
+    const rawBody = `upstream body with Bearer ${rejectedToken} and refresh_token=secret-refresh`
+    let calls = 0
+    const upstream = (async () => {
+      calls += 1
+      return new Response(rawBody, { status: 401 })
+    }) as typeof fetch
+
+    try {
+      console.warn = (...args: unknown[]) => {
+        warnings.push(args)
+      }
+      const claudeFetch = createClaudeFetch({
+        accessToken: rejectedToken,
+        upstream,
+        retries: 1,
+        authRecovery: {
+          reload: () => null,
+          refresh: () => null,
+        },
+      })
+
+      const response = await claudeFetch(
+        "https://api.anthropic.com/v1/messages",
+        {
+          method: "POST",
+          body: JSON.stringify({ model: "claude-sonnet-4-6", messages: [] }),
+        },
+      )
+
+      assert.equal(response.status, 401)
+      assert.equal(await response.text(), rawBody)
+      await new Promise((resolve) => setImmediate(resolve))
+    } finally {
+      console.warn = originalWarn
+    }
+
+    assert.equal(calls, 1)
+    assert.deepEqual(warnings, [])
+    const output = logged.join("")
+    assert.ok(!output.includes(rejectedToken))
+    assert.ok(!output.includes("secret-refresh"))
+    assert.ok(!output.includes(rawBody))
+  })
+
   it("retries a 401 once with a reloaded primary token when it rotated externally", async () => {
     let calls = 0
     const authHeaders: string[] = []

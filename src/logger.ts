@@ -80,6 +80,19 @@ function redactValue(key: string, value: unknown): unknown {
   }
 
   return value
+    .replace(
+      /\bBearer\s+eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)?\b/g,
+      "Bearer JWT_REDACTED",
+    )
+    .replace(
+      /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)?\b/g,
+      "JWT_REDACTED",
+    )
+    .replace(/\baccess_token=([^&\s"'{};,]+)/gi, "access_token=REDACTED")
+    .replace(/\brefresh_token=([^&\s"'{};,]+)/gi, "refresh_token=REDACTED")
+    .replace(/("access_token"\s*:\s*")[^"]+(")/gi, "$1REDACTED$2")
+    .replace(/("refresh_token"\s*:\s*")[^"]+(")/gi, "$1REDACTED$2")
+    .replace(/sk-ant-[A-Za-z0-9_-]+/g, "sk-ant-REDACTED")
 }
 
 export function redact(data: Record<string, unknown>): Record<string, unknown> {
