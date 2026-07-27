@@ -166,11 +166,7 @@ export const model = ((modelID: string, settings: Settings): Model => {
   const accessToken = requireAccessToken(settings)
   const runtime = providerRuntime
   if (runtime === undefined) {
-    return {
-      id: modelID,
-      provider: "anthropic",
-      route: { id: "anthropic-messages" },
-    } as unknown as Model
+    throw new Error("OpenCode provider runtime is unavailable")
   }
 
   const { Auth, Endpoint, HttpTransport, Route } = runtime.route
