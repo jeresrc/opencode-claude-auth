@@ -247,9 +247,6 @@ function warnOnErrorResponse(response: Response, modelId: string): void {
       } catch {}
       message = sanitizeErrorMessage(message)
       log("fetch_error_response", { status, modelId, message })
-      console.warn(
-        `opencode-claude-auth: API ${status} for ${modelId}: ${message}`,
-      )
     })
     .catch(() => {})
 }

@@ -521,6 +521,68 @@ describe("Claude OAuth fetch pipeline", () => {
     }
   })
 
+  it("logs API errors without writing raw responses to console.warn", async () => {
+    const logged: string[] = []
+    initLogger({
+      stream: {
+        write(chunk: string) {
+          logged.push(chunk)
+          return true
+        },
+      } as never,
+    })
+
+    const originalWarn = console.warn
+    const warnings: unknown[][] = []
+    const errorBody = JSON.stringify({
+      type: "error",
+      error: {
+        type: "rate_limit_error",
+        message:
+          "This request would exceed your account's rate limit. Please try again later.",
+      },
+    })
+    const upstream = (async () =>
+      new Response(errorBody, {
+        status: 429,
+        headers: {
+          "content-type": "application/json",
+          "retry-after": "11218",
+        },
+      })) as typeof fetch
+    const claudeFetch = createClaudeFetch({
+      accessToken: "fixed-token",
+      upstream,
+      retries: 1,
+    })
+
+    try {
+      console.warn = (...args: unknown[]) => {
+        warnings.push(args)
+      }
+      const response = await claudeFetch(
+        "https://api.anthropic.com/v1/messages",
+        {
+          method: "POST",
+          body: JSON.stringify({ model: "claude-opus-5", messages: [] }),
+        },
+      )
+
+      assert.equal(response.status, 429)
+      assert.equal(response.headers.get("retry-after"), "11218")
+      assert.equal(await response.text(), errorBody)
+      await new Promise((resolve) => setImmediate(resolve))
+    } finally {
+      console.warn = originalWarn
+    }
+
+    assert.deepEqual(warnings, [])
+    const logOutput = logged.join("")
+    assert.match(logOutput, /"event":"fetch_error_response"/)
+    assert.match(logOutput, /"status":429/)
+    assert.match(logOutput, /rate limit/)
+  })
+
   it("sanitizes and truncates error bodies before logging or warning", async () => {
     const logged: string[] = []
     initLogger({
@@ -562,13 +624,10 @@ describe("Claude OAuth fetch pipeline", () => {
 
     const warning = warnings.join("\n")
     const logOutput = logged.join("")
-    assert.ok(warning.length < 1500, `warning was ${warning.length} chars`)
+    assert.equal(warning, "")
     assert.ok(logOutput.length < 2000, `log was ${logOutput.length} chars`)
-    assert.ok(!warning.includes(secretBearer))
-    assert.ok(!warning.includes(secretApiKey))
     assert.ok(!logOutput.includes(secretBearer))
     assert.ok(!logOutput.includes(secretApiKey))
-    assert.ok(warning.includes("REDACTED"))
     assert.ok(logOutput.includes("REDACTED"))
   })
 
@@ -620,6 +679,7 @@ describe("Claude OAuth fetch pipeline", () => {
 
     const warning = warnings.join("\n")
     const logOutput = logged.join("")
+    assert.equal(warning, "")
     for (const secret of [
       bearerToken,
       accessToken,
@@ -627,12 +687,9 @@ describe("Claude OAuth fetch pipeline", () => {
       refreshToken,
       jwt,
     ]) {
-      assert.ok(!warning.includes(secret), `warning leaked ${secret}`)
       assert.ok(!logOutput.includes(secret), `log leaked ${secret}`)
     }
-    assert.ok(warning.includes("upstream OAuth failure"))
     assert.ok(logOutput.includes("upstream OAuth failure"))
-    assert.ok(warning.includes("REDACTED"))
     assert.ok(logOutput.includes("REDACTED"))
   })
 
