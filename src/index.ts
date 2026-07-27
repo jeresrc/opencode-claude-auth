@@ -1,6 +1,7 @@
 import * as Plugin from "@opencode-ai/plugin/v2/promise"
 import { applyAnthropicCatalog } from "./catalog.ts"
 import { reconcileConnectedCredential } from "./credential-sync.ts"
+import { startProactiveRefresh } from "./credentials.ts"
 import { registerAnthropicIntegration } from "./integration.ts"
 import { initLogger } from "./logger.ts"
 import {
@@ -41,9 +42,15 @@ const plugin: RuntimePlugin = {
     initLogger()
     await runtime.integration.transform(registerAnthropicIntegration)
     await reconcileConnectedCredential(runtime.integration)
+    const stopProactiveRefresh = startProactiveRefresh()
     await runtime.catalog.transform(applyAnthropicCatalog)
     await runtime.session.hook("context", injectClaudeIdentity)
-    return await startRateLimitNotices(runtime)
+    const stopRateLimitNotices = await startRateLimitNotices(runtime)
+
+    return async () => {
+      stopProactiveRefresh()
+      await stopRateLimitNotices()
+    }
   },
 }
 

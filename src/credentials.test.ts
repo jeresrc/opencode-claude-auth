@@ -25,9 +25,21 @@ async function loadCredentialsWithCountingKeychain(
         source: string
         credentials: Creds
       },
-      options?: { force?: boolean; reloadSource?: boolean },
+      options?: {
+        force?: boolean
+        reloadSource?: boolean
+        refreshThresholdMs?: number
+      },
     ) => Creds | null
     initAccounts: (accounts: unknown[]) => void
+    PROACTIVE_REFRESH_INTERVAL_MS: number
+    PROACTIVE_REFRESH_THRESHOLD_MS: number
+    startProactiveRefresh: (options?: {
+      setInterval?: typeof setInterval
+      clearInterval?: typeof clearInterval
+      now?: () => number
+      refresh?: (refreshToken: string) => Creds | null
+    }) => () => void
   }
   keychainModule: {
     __getReadCount: () => number
@@ -117,9 +129,21 @@ export function __setCredentials(c) {
           source: string
           credentials: Creds
         },
-        options?: { force?: boolean; reloadSource?: boolean },
+        options?: {
+          force?: boolean
+          reloadSource?: boolean
+          refreshThresholdMs?: number
+        },
       ) => Creds | null
       initAccounts: (accounts: unknown[]) => void
+      PROACTIVE_REFRESH_INTERVAL_MS: number
+      PROACTIVE_REFRESH_THRESHOLD_MS: number
+      startProactiveRefresh: (options?: {
+        setInterval?: typeof setInterval
+        clearInterval?: typeof clearInterval
+        now?: () => number
+        refresh?: (refreshToken: string) => Creds | null
+      }) => () => void
     },
     keychainModule: keychainModule as {
       __getReadCount: () => number
@@ -413,6 +437,130 @@ describe("credential caching", () => {
       assert.equal(result.accessToken, "current-access")
       assert.equal(result.refreshToken, "current-refresh")
       assert.equal(keychainModule.__getReadCount(), 0)
+    } finally {
+      Date.now = originalNow
+    }
+  })
+
+  it("startProactiveRefresh refreshes at startup when primary credentials expire within one hour", async () => {
+    const originalNow = Date.now
+    const now = 1_700_000_000_000
+    Date.now = () => now
+
+    try {
+      const { credentialsModule, keychainModule } =
+        await loadCredentialsWithCountingKeychain(now + 30 * 60_000)
+      const account = {
+        label: "Claude",
+        source: "Claude Code-credentials",
+        credentials: {
+          accessToken: "old-token",
+          refreshToken: "refresh-token",
+          expiresAt: now + 30 * 60_000,
+        },
+      }
+      credentialsModule.initAccounts([account])
+      const intervals: number[] = []
+      const callbacks: Array<() => void> = []
+      const refreshed = {
+        accessToken: "new-token",
+        refreshToken: "new-refresh",
+        expiresAt: now + 10 * 60 * 60_000,
+      }
+
+      const cleanup = credentialsModule.startProactiveRefresh({
+        setInterval: ((callback: () => void, interval: number) => {
+          callbacks.push(callback)
+          intervals.push(interval)
+          return 123 as never
+        }) as typeof setInterval,
+        clearInterval: (() => undefined) as typeof clearInterval,
+        now: () => now,
+        refresh: () => refreshed,
+      })
+
+      assert.equal(account.credentials.accessToken, "new-token")
+      assert.equal(keychainModule.__getWriteCount(), 1)
+      assert.deepEqual(intervals, [
+        credentialsModule.PROACTIVE_REFRESH_INTERVAL_MS,
+      ])
+      assert.equal(callbacks.length, 1)
+      cleanup()
+    } finally {
+      Date.now = originalNow
+    }
+  })
+
+  it("startProactiveRefresh skips fresh credentials and cleanup clears the timer", async () => {
+    const originalNow = Date.now
+    const now = 1_700_000_000_000
+    Date.now = () => now
+
+    try {
+      const { credentialsModule, keychainModule } =
+        await loadCredentialsWithCountingKeychain(now + 2 * 60 * 60_000)
+      credentialsModule.initAccounts([
+        {
+          label: "Claude",
+          source: "Claude Code-credentials",
+          credentials: {
+            accessToken: "fresh-token",
+            refreshToken: "refresh-token",
+            expiresAt: now + 2 * 60 * 60_000,
+          },
+        },
+      ])
+      const cleared: unknown[] = []
+      const cleanup = credentialsModule.startProactiveRefresh({
+        setInterval: ((callback: () => void) => {
+          callback()
+          return "timer-id" as never
+        }) as typeof setInterval,
+        clearInterval: ((timer: unknown) => {
+          cleared.push(timer)
+        }) as typeof clearInterval,
+        now: () => now,
+        refresh: () => {
+          throw new Error("fresh credentials must not refresh")
+        },
+      })
+
+      assert.equal(keychainModule.__getWriteCount(), 0)
+      cleanup()
+      cleanup()
+      assert.deepEqual(cleared, ["timer-id"])
+    } finally {
+      Date.now = originalNow
+    }
+  })
+
+  it("startProactiveRefresh seeds the primary account when startup reconciliation only read keychain", async () => {
+    const originalNow = Date.now
+    const now = 1_700_000_000_000
+    Date.now = () => now
+
+    try {
+      const { credentialsModule, keychainModule } =
+        await loadCredentialsWithCountingKeychain(now + 30 * 60_000)
+      const refreshed = {
+        accessToken: "new-token",
+        refreshToken: "new-refresh",
+        expiresAt: now + 10 * 60 * 60_000,
+      }
+
+      const cleanup = credentialsModule.startProactiveRefresh({
+        setInterval: (() => "timer-id" as never) as typeof setInterval,
+        clearInterval: (() => undefined) as typeof clearInterval,
+        now: () => now,
+        refresh: () => refreshed,
+      })
+
+      const current = credentialsModule.getCredentialsForSync()
+      assert.ok(current)
+      assert.equal(current.accessToken, "new-token")
+      assert.equal(keychainModule.__getReadCount(), 1)
+      assert.equal(keychainModule.__getWriteCount(), 1)
+      cleanup()
     } finally {
       Date.now = originalNow
     }

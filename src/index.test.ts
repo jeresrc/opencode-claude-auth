@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import { access, readFile } from "node:fs/promises"
 import test from "node:test"
 import { applyAnthropicCatalog } from "./catalog.ts"
+import { initAccounts } from "./credentials.ts"
 import plugin from "./index.ts"
 import { registerAnthropicIntegration } from "./integration.ts"
 import { injectClaudeIdentity } from "./session-context.ts"
@@ -22,6 +23,21 @@ test("setup registers v2 plugin domains then starts rate-limit listener", async 
   const order: string[] = []
   const registrations: unknown[] = []
   let subscriptionStopped = false
+  const originalSetInterval = globalThis.setInterval
+  const originalClearInterval = globalThis.clearInterval
+  const proactiveTimer = { unref: () => order.push("proactive:unref") }
+  let clearedTimer: unknown
+  initAccounts([
+    {
+      label: "Claude",
+      source: "Claude Code-credentials",
+      credentials: {
+        accessToken: "fresh-token",
+        refreshToken: "fresh-refresh",
+        expiresAt: Date.now() + 2 * 60 * 60_000,
+      },
+    },
+  ])
   const context = {
     integration: {
       transform: async (handler: unknown) => {
@@ -77,24 +93,44 @@ test("setup registers v2 plugin domains then starts rate-limit listener", async 
     },
   } as unknown as Parameters<typeof plugin.setup>[0]
 
-  const cleanup = await plugin.setup(context)
+  globalThis.setInterval = ((callback: () => void, intervalMs: number) => {
+    order.push(`proactive:setInterval:${intervalMs}`)
+    assert.equal(typeof callback, "function")
+    return proactiveTimer as never
+  }) as typeof setInterval
+  globalThis.clearInterval = ((timer: unknown) => {
+    order.push("proactive:clearInterval")
+    clearedTimer = timer
+  }) as typeof clearInterval
 
-  assert.deepEqual(order, [
-    "integration",
-    "integration:active",
-    "catalog",
-    "session:context",
-    "event:subscribe",
-  ])
-  assert.deepEqual(registrations, [
-    registerAnthropicIntegration,
-    applyAnthropicCatalog,
-    injectClaudeIdentity,
-  ])
-  assert.equal(typeof cleanup, "function")
+  try {
+    const cleanup = await plugin.setup(context)
 
-  await cleanup?.()
-  assert.equal(subscriptionStopped, true)
+    assert.deepEqual(order, [
+      "integration",
+      "integration:active",
+      "proactive:setInterval:300000",
+      "proactive:unref",
+      "catalog",
+      "session:context",
+      "event:subscribe",
+    ])
+    assert.deepEqual(registrations, [
+      registerAnthropicIntegration,
+      applyAnthropicCatalog,
+      injectClaudeIdentity,
+    ])
+    assert.equal(typeof cleanup, "function")
+
+    await cleanup?.()
+    assert.equal(clearedTimer, proactiveTimer)
+    assert.equal(subscriptionStopped, true)
+    assert.deepEqual(order.at(-1), "proactive:clearInterval")
+  } finally {
+    initAccounts([])
+    globalThis.setInterval = originalSetInterval
+    globalThis.clearInterval = originalClearInterval
+  }
 })
 
 test("local v2 docs use plugins file URL and do not document removed v1 auth paths", async () => {

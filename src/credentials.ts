@@ -24,9 +24,12 @@ export type { ClaudeAccount } from "./keychain.ts"
 export type RefreshOptions = {
   force?: boolean
   reloadSource?: boolean
+  refreshThresholdMs?: number
 }
 
 const CREDENTIAL_CACHE_TTL_MS = 30_000
+export const PROACTIVE_REFRESH_INTERVAL_MS = 5 * 60_000
+export const PROACTIVE_REFRESH_THRESHOLD_MS = 60 * 60_000
 
 const accountCacheMap = new Map<
   string,
@@ -291,7 +294,8 @@ export function refreshIfNeeded(
   }
 
   const creds = target.credentials
-  if (!force && creds.expiresAt > Date.now() + 60_000) return creds
+  const refreshThresholdMs = options.refreshThresholdMs ?? 60_000
+  if (!force && creds.expiresAt > Date.now() + refreshThresholdMs) return creds
 
   log("refresh_needed", {
     source: target.source,
@@ -324,6 +328,77 @@ export function refreshIfNeeded(
     expiresAt: refreshed?.expiresAt,
   })
   return null
+}
+
+type ProactiveRefreshOptions = {
+  setInterval?: typeof setInterval
+  clearInterval?: typeof clearInterval
+  now?: () => number
+  refresh?: (refreshToken: string) => ClaudeCredentials | null
+}
+
+export function startProactiveRefresh(
+  options: ProactiveRefreshOptions = {},
+): () => void {
+  const setTimer = options.setInterval ?? globalThis.setInterval
+  const clearTimer = options.clearInterval ?? globalThis.clearInterval
+  const now = options.now ?? Date.now
+  let cleaned = false
+
+  const refresh = () => {
+    let account: ClaudeAccount | null = null
+    try {
+      account = allAccounts[0] ?? refreshAccountsList()[0] ?? null
+      if (!account) return
+
+      const expiresIn = account.credentials.expiresAt - now()
+      if (expiresIn >= PROACTIVE_REFRESH_THRESHOLD_MS) return
+
+      let refreshed: ClaudeCredentials | null = null
+      if (options.refresh && account.credentials.refreshToken) {
+        const forced = options.refresh(account.credentials.refreshToken)
+        if (forced && forced.expiresAt > now() + 60_000) {
+          account.credentials = forced
+          writeBackCredentials(account.source, forced)
+          refreshed = forced
+        }
+      } else {
+        refreshed = refreshIfNeeded(account, {
+          reloadSource: true,
+          refreshThresholdMs: PROACTIVE_REFRESH_THRESHOLD_MS,
+        })
+      }
+
+      if (refreshed) {
+        accountCacheMap.set(account.source, {
+          creds: refreshed,
+          cachedAt: now(),
+        })
+        return
+      }
+
+      log("proactive_refresh_failed", {
+        source: account.source,
+        expiresAt: account.credentials.expiresAt,
+      })
+    } catch {
+      log("proactive_refresh_failed", {
+        source: account?.source ?? "primary",
+        expiresAt: account?.credentials.expiresAt ?? null,
+      })
+    }
+  }
+
+  refresh()
+  const timer = setTimer(refresh, PROACTIVE_REFRESH_INTERVAL_MS)
+  const maybeUnref = timer as { unref?: () => void }
+  maybeUnref.unref?.()
+
+  return () => {
+    if (cleaned) return
+    cleaned = true
+    clearTimer(timer)
+  }
 }
 
 /**
