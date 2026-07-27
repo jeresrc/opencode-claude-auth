@@ -1,7 +1,11 @@
 import type { SystemPart as SystemPartType } from "@opencode-ai/ai"
-import type { SessionContext } from "@opencode-ai/plugin/v2/session"
 
 const ANTHROPIC_PROVIDER_ID = "anthropic"
+
+export type SessionContext = {
+  readonly model: { readonly providerID: string }
+  readonly system: SystemPartType[]
+}
 
 export const CLAUDE_CODE_IDENTITY =
   "You are Claude Code, Anthropic's official CLI for Claude."

@@ -1,19 +1,50 @@
-import { Plugin } from "@opencode-ai/plugin/v2"
+import * as Plugin from "@opencode-ai/plugin/v2/promise"
 import { applyAnthropicCatalog } from "./catalog.ts"
 import { reconcileConnectedCredential } from "./credential-sync.ts"
 import { registerAnthropicIntegration } from "./integration.ts"
 import { initLogger } from "./logger.ts"
-import { startRateLimitNotices } from "./rate-limit-notice.ts"
+import {
+  startRateLimitNotices,
+  type RateLimitNoticeContext,
+} from "./rate-limit-notice.ts"
 import { injectClaudeIdentity } from "./session-context.ts"
 
-export default Plugin.define({
+type Cleanup = () => Promise<void> | void
+
+type RuntimeSessionContext = {
+  readonly session: {
+    readonly hook: (
+      name: "context",
+      handler: typeof injectClaudeIdentity,
+    ) => Promise<unknown> | unknown
+  }
+}
+
+type RuntimeIntegration = Plugin.PluginContext["integration"] &
+  Parameters<typeof reconcileConnectedCredential>[0]
+
+type RuntimePluginContext = Omit<Plugin.PluginContext, "integration"> & {
+  readonly integration: RuntimeIntegration
+} & RateLimitNoticeContext &
+  RuntimeSessionContext
+
+type RuntimePlugin = Omit<Plugin.Plugin, "setup"> & {
+  readonly setup: (
+    context: Plugin.PluginContext,
+  ) => Promise<Cleanup | void> | Cleanup | void
+}
+
+const plugin: RuntimePlugin = {
   id: "opencode-claude-auth",
   async setup(context) {
+    const runtime = context as unknown as RuntimePluginContext
     initLogger()
-    await context.integration.transform(registerAnthropicIntegration)
-    await reconcileConnectedCredential(context.integration)
-    await context.catalog.transform(applyAnthropicCatalog)
-    await context.session.hook("context", injectClaudeIdentity)
-    return await startRateLimitNotices(context)
+    await runtime.integration.transform(registerAnthropicIntegration)
+    await reconcileConnectedCredential(runtime.integration)
+    await runtime.catalog.transform(applyAnthropicCatalog)
+    await runtime.session.hook("context", injectClaudeIdentity)
+    return await startRateLimitNotices(runtime)
   },
-})
+}
+
+export default Plugin.define(plugin as unknown as Plugin.Plugin)

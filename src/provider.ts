@@ -16,6 +16,9 @@ import { FetchHttpClient } from "effect/unstable/http"
 import { createClaudeFetch } from "./claude-fetch.ts"
 
 type FetchFn = typeof fetch
+type TransportStream<Body, Prepared, Frame> = ReturnType<
+  Transport<Body, Prepared, Frame>["frames"]
+>
 
 export interface Settings extends ProviderPackageSettings {
   readonly apiKey?: string
@@ -53,13 +56,22 @@ function withExecutor<Body, Prepared, Frame>(
   return {
     ...transport,
     prepare: transport.prepare,
-    frames: (prepared, request, runtime) =>
-      Stream.unwrap(
-        Effect.gen(function* () {
-          const http = yield* RequestExecutor.Service
-          return transport.frames(prepared, request, { ...runtime, http })
-        }).pipe(Effect.provide(layer)),
-      ),
+    frames: (
+      prepared,
+      request,
+      runtime,
+    ): TransportStream<Body, Prepared, Frame> => {
+      const frames = Effect.gen(function* () {
+        const http = yield* RequestExecutor.Service as any
+        return transport.frames(prepared, request, { ...runtime, http })
+      }).pipe(Effect.provide(layer))
+
+      return Stream.unwrap(frames as never) as TransportStream<
+        Body,
+        Prepared,
+        Frame
+      >
+    },
   }
 }
 

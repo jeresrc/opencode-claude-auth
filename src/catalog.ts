@@ -1,4 +1,4 @@
-import type { CatalogDraft } from "@opencode-ai/plugin/v2/catalog"
+import type { CatalogDraft } from "@opencode-ai/plugin/v2/promise"
 import { ANTHROPIC_INTEGRATION_ID } from "./integration.ts"
 
 const ANTHROPIC_PROVIDER_ID = "anthropic"
@@ -8,7 +8,43 @@ const ANTHROPIC_PACKAGES = new Set([
 ])
 
 type CatalogModel = NonNullable<ReturnType<CatalogDraft["model"]["get"]>>
-type ModelVariant = CatalogModel["variants"][number]
+type RuntimeProvider = {
+  package?: unknown
+  integrationID?: string
+}
+
+type ModelVariant = {
+  readonly id: string
+  readonly settings?: Record<string, unknown>
+}
+
+type RuntimeModel = Omit<CatalogModel, "variants" | "cost"> & {
+  package?: unknown
+  variants: ModelVariant[]
+  cost: unknown[]
+}
+
+type RuntimeCatalogDraft = {
+  readonly provider: {
+    readonly get: (providerID: string) =>
+      | {
+          readonly provider: RuntimeProvider
+          readonly models: ReadonlyMap<string, unknown>
+        }
+      | undefined
+    readonly update: (
+      providerID: string,
+      update: (provider: RuntimeProvider) => void,
+    ) => void
+  }
+  readonly model: {
+    readonly update: (
+      providerID: string,
+      modelID: string,
+      update: (model: RuntimeModel) => void,
+    ) => void
+  }
+}
 
 export function providerFileUrl(baseUrl = import.meta.url): string {
   return new URL("./provider.js", baseUrl).href
@@ -27,18 +63,19 @@ function ensureNoEffortVariant(variants: ModelVariant[]): ModelVariant[] {
 }
 
 export function applyAnthropicCatalog(draft: CatalogDraft): void {
-  const record = draft.provider.get(ANTHROPIC_PROVIDER_ID)
+  const runtime = draft as unknown as RuntimeCatalogDraft
+  const record = runtime.provider.get(ANTHROPIC_PROVIDER_ID)
   if (!record || !isAnthropicPackage(record.provider.package)) return
 
   const url = providerFileUrl()
 
-  draft.provider.update(ANTHROPIC_PROVIDER_ID, (provider) => {
+  runtime.provider.update(ANTHROPIC_PROVIDER_ID, (provider) => {
     provider.package = url
     provider.integrationID = ANTHROPIC_INTEGRATION_ID
   })
 
   for (const [modelID] of record.models) {
-    draft.model.update(ANTHROPIC_PROVIDER_ID, modelID, (model) => {
+    runtime.model.update(ANTHROPIC_PROVIDER_ID, modelID, (model) => {
       const inheritsProvider = model.package === undefined
       const usesAnthropicPackage = isAnthropicPackage(model.package)
       if (!inheritsProvider && !usesAnthropicPackage) return
