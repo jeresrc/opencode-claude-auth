@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - This plan depends on `docs/superpowers/plans/2026-07-26-v2-provider-compat-stream-plan.md` and `docs/superpowers/plans/2026-07-26-upstream-safe-ports-plan.md` being complete and passing.
-- Pin `@opencode-ai/ai` to `1.17.20` and `@opencode-ai/plugin` to `1.18.3`.
+- Pin `@opencode-ai/ai` to `0.0.0-next-16255` and `@opencode-ai/plugin` to `1.18.3`.
 - Preserve the current V2 architecture: `Plugin.define`, Integration V2, catalog transform, and native provider registration.
 - Do not wholesale merge `origin/main` or port the legacy upstream `src/index.ts` architecture.
 - Do not mutate Integration state except through existing sync/writeback paths.

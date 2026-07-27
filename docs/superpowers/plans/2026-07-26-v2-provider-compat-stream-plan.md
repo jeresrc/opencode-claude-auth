@@ -10,7 +10,8 @@
 
 ## Global Constraints
 
-- Pin `@opencode-ai/ai` to `1.17.20` and `@opencode-ai/plugin` to `1.18.3`.
+- Pin `@opencode-ai/ai` to `0.0.0-next-16255` and `@opencode-ai/plugin` to `1.18.3`.
+- `@opencode-ai/ai@1.17.20` is an internal unpublished version; `@opencode-ai/ai@0.0.0-next-16255` matches the local `opencode2 v0.0.0-next-16255` CLI runtime and is reproducible from npm.
 - Preserve the current V2 architecture: `Plugin.define`, Integration V2, catalog transform, and native provider registration.
 - Add a provider-local stream wrapper that guarantees OpenCode receives a valid finish reason for terminal stream events without changing OpenCode core.
 - Wrap `route.streamPrepared` in `src/provider.ts`.
@@ -34,7 +35,7 @@ This is the first implementation plan. `2026-07-26-upstream-safe-ports-plan.md` 
 
 ## File Map
 
-- Modify `package.json`: pin `@opencode-ai/ai` to `1.17.20`, pin `@opencode-ai/plugin` to `1.18.3`, keep `effect` at `4.0.0-beta.83`, and keep existing scripts.
+- Modify `package.json`: pin `@opencode-ai/ai` to `0.0.0-next-16255`, pin `@opencode-ai/plugin` to `1.18.3`, keep `effect` at `4.0.0-beta.83`, and keep existing scripts.
 - Modify `pnpm-lock.yaml`: lock the exact runtime package versions after `pnpm install` resolves them.
 - Modify `src/index.ts`: keep the default V2 plugin export and adapt the plugin import to the `@opencode-ai/plugin@1.18.3` public subpath while preserving `Plugin.define` syntax through a namespace import.
 - Modify `src/catalog.ts`: keep `applyAnthropicCatalog(draft: CatalogDraft): void` and import `CatalogDraft` from the target plugin public API.
@@ -53,7 +54,7 @@ This is the first implementation plan. `2026-07-26-upstream-safe-ports-plan.md` 
 
 **Interfaces:**
 - Consumes: `package.json` dependency object.
-- Produces: exact dependency pins consumed by later tasks: `@opencode-ai/ai@1.17.20`, `@opencode-ai/plugin@1.18.3`, `effect@4.0.0-beta.83`.
+- Produces: exact dependency pins consumed by later tasks: `@opencode-ai/ai@0.0.0-next-16255`, `@opencode-ai/plugin@1.18.3`, `effect@4.0.0-beta.83`.
 
 - [ ] **Step 1: Write the failing dependency contract test**
 
@@ -69,7 +70,7 @@ test("OpenCode runtime package versions are pinned to the approved V2 sync targe
     await readFile(new URL("../package.json", import.meta.url), "utf8"),
   ) as { dependencies: Record<string, string> }
 
-  assert.equal(pkg.dependencies["@opencode-ai/ai"], "1.17.20")
+  assert.equal(pkg.dependencies["@opencode-ai/ai"], "0.0.0-next-16255")
   assert.equal(pkg.dependencies["@opencode-ai/plugin"], "1.18.3")
   assert.equal(pkg.dependencies.effect, "4.0.0-beta.83")
 })
@@ -86,16 +87,16 @@ Expected: FAIL with an assertion showing `@opencode-ai/ai` or `@opencode-ai/plug
 Run:
 
 ```bash
-pnpm add @opencode-ai/ai@1.17.20 @opencode-ai/plugin@1.18.3 effect@4.0.0-beta.83 --save-exact
+pnpm add @opencode-ai/ai@0.0.0-next-16255 @opencode-ai/plugin@1.18.3 effect@4.0.0-beta.83 --save-exact
 ```
 
-If the project registry cannot resolve `@opencode-ai/ai@1.17.20`, stop the implementation and report the exact package-manager error. Do not substitute a nearby `0.0.0-next-*` version or a different stable version.
+If the project registry cannot resolve `@opencode-ai/ai@0.0.0-next-16255`, stop the implementation and report the exact package-manager error. Do not substitute a nearby `0.0.0-next-*` version or a different stable version.
 
 After the command succeeds, the `dependencies` block in `package.json` must be exactly:
 
 ```json
 {
-  "@opencode-ai/ai": "1.17.20",
+  "@opencode-ai/ai": "0.0.0-next-16255",
   "@opencode-ai/plugin": "1.18.3",
   "effect": "4.0.0-beta.83"
 }
@@ -110,7 +111,7 @@ node --test --experimental-strip-types src/version-contract.test.ts
 pnpm list @opencode-ai/ai @opencode-ai/plugin --depth 0
 ```
 
-Expected: PASS for the test, and `pnpm list` prints `@opencode-ai/ai@1.17.20` and `@opencode-ai/plugin@1.18.3` under `dependencies`.
+Expected: PASS for the test, and `pnpm list` prints `@opencode-ai/ai@0.0.0-next-16255` and `@opencode-ai/plugin@1.18.3` under `dependencies`.
 
 - [ ] **Step 5: Commit the dependency pin**
 

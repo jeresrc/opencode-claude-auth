@@ -6,7 +6,7 @@ Current HEAD: `e085dde8edb90fb8485fe3aa93976d49bc4de2b6`
 
 ## Goals
 
-- Align the V2 plugin implementation with the local OpenCode runtime by pinning `@opencode-ai/ai` to `1.17.20` and `@opencode-ai/plugin` to `1.18.3`.
+- Align the V2 plugin implementation with the local OpenCode runtime by pinning `@opencode-ai/ai` to `0.0.0-next-16255` and `@opencode-ai/plugin` to `1.18.3`.
 - Preserve the current V2 architecture: `Plugin.define`, Integration V2, catalog transform, and native provider registration.
 - Add a provider-local stream wrapper that guarantees OpenCode receives a valid finish reason for terminal stream events without changing OpenCode core.
 - Safely port selected upstream fixes that apply to this V2 provider: tool pair repair, model identity/config, OAuth expiry truncation, 401 retry behavior, proactive refresh, and sanitized TUI error handling.
@@ -30,7 +30,8 @@ Current HEAD: `e085dde8edb90fb8485fe3aa93976d49bc4de2b6`
 - Merge-base: `4ec411e`.
 - Branch divergence: `v2` is ahead by 20 commits and behind by 14 commits.
 - A wholesale merge is intentionally out of scope because upstream currently includes legacy/provider architecture that does not match this branch's V2 plugin design.
-- Current dependency state uses provider `next-15707`; target runtime alignment is `@opencode-ai/ai@1.17.20` and `@opencode-ai/plugin@1.18.3`.
+- Current dependency state uses provider `next-15707`; target runtime alignment is `@opencode-ai/ai@0.0.0-next-16255` and `@opencode-ai/plugin@1.18.3`.
+- `@opencode-ai/ai@1.17.20` is an internal unpublished version; `@opencode-ai/ai@0.0.0-next-16255` matches the local `opencode2 v0.0.0-next-16255` CLI runtime and is reproducible from npm.
 - Candidate upstream changes to port selectively:
   - `d056c7c`: tool adjacency handling.
   - `ab54ebb`: model config, effort rules, and part of 401 handling.
@@ -43,7 +44,7 @@ Current HEAD: `e085dde8edb90fb8485fe3aa93976d49bc4de2b6`
 
 ### Block A: V2 Base Alignment
 
-- Pin `@opencode-ai/ai` to `1.17.20` and `@opencode-ai/plugin` to `1.18.3`.
+- Pin `@opencode-ai/ai` to `0.0.0-next-16255` and `@opencode-ai/plugin` to `1.18.3`.
 - Adapt only real type/API incompatibilities discovered after pinning.
 - Keep the provider on the current V2 shape:
   - `Plugin.define` remains the plugin entrypoint.
