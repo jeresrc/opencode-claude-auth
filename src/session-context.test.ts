@@ -1,11 +1,19 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 import type { SystemPart } from "@opencode-ai/ai"
-import type { SessionContext } from "@opencode-ai/plugin/v2/session"
 import {
   CLAUDE_CODE_IDENTITY,
   injectClaudeIdentity,
 } from "./session-context.ts"
+
+type SessionContext = {
+  readonly sessionID: string
+  readonly agent: string
+  readonly model: { readonly providerID: string; readonly modelID: string }
+  readonly system: SystemPart[]
+  readonly messages: unknown[]
+  readonly tools: Record<string, unknown>
+}
 
 function context(providerID: string, system: unknown[] = []): SessionContext {
   return {

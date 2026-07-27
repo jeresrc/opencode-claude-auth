@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import type { CatalogDraft } from "@opencode-ai/plugin/v2/catalog"
+import type { CatalogDraft } from "@opencode-ai/plugin/v2/promise"
 import { applyAnthropicCatalog, providerFileUrl } from "./catalog.ts"
 
 type ProviderRecord = {

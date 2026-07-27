@@ -61,6 +61,8 @@ function withExecutor<Body, Prepared, Frame>(
       request,
       runtime,
     ): TransportStream<Body, Prepared, Frame> => {
+      // Pinned Effect/@opencode-ai/ai types disagree at this executor/stream boundary.
+      // The casts isolate that drift without changing runtime stream composition.
       const frames = Effect.gen(function* () {
         const http = yield* RequestExecutor.Service as any
         return transport.frames(prepared, request, { ...runtime, http })
