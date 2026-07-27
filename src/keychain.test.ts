@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
 import {
+  PRIMARY_SERVICE,
   buildAccountLabels,
   parseCredentials,
   updateCredentialBlob,
@@ -12,31 +13,6 @@ import {
 } from "./keychain.ts"
 import { chmodSync, statSync } from "node:fs"
 import { mkdtemp } from "node:fs/promises"
-
-// Mirrors listClaudeKeychainServices regex logic for unit testing
-function extractServicesFromDump(output: string): string[] {
-  const PRIMARY = "Claude Code-credentials"
-  const services: string[] = []
-  const seen = new Set<string>()
-
-  const re = /"Claude Code-credentials(?:-[0-9a-f]+)?"/g
-  let m = re.exec(output)
-  while (m !== null) {
-    const svc = m[0].slice(1, -1)
-    if (!seen.has(svc)) {
-      seen.add(svc)
-      services.push(svc)
-    }
-    m = re.exec(output)
-  }
-
-  const ordered: string[] = []
-  if (seen.has(PRIMARY)) ordered.push(PRIMARY)
-  for (const svc of services) {
-    if (svc !== PRIMARY) ordered.push(svc)
-  }
-  return ordered
-}
 
 function readCredentialsFile(credPath: string): {
   accessToken: string
@@ -169,107 +145,19 @@ describe("parseCredentials", () => {
   })
 })
 
-describe("keychain service discovery", () => {
-  const SAMPLE_DUMP = `
-keychain: "/Users/test/Library/Keychains/login.keychain-db"
-version: 512
-class: "genp"
-attributes:
-    0x00000007 <blob>="Claude Code-credentials-e8dc196c"
-    "svce"<blob>="Claude Code-credentials-e8dc196c"
-keychain: "/Users/test/Library/Keychains/login.keychain-db"
-version: 512
-class: "genp"
-attributes:
-    0x00000007 <blob>="Claude Code-credentials-b28bbb7c"
-    "svce"<blob>="Claude Code-credentials-b28bbb7c"
-keychain: "/Users/test/Library/Keychains/login.keychain-db"
-version: 512
-class: "genp"
-attributes:
-    0x00000007 <blob>="Claude Code-credentials"
-    "svce"<blob>="Claude Code-credentials"
-  `
-
-  it("discovers all Claude Code-credentials* services", () => {
-    const services = extractServicesFromDump(SAMPLE_DUMP)
-    assert.ok(services.includes("Claude Code-credentials"))
-    assert.ok(services.includes("Claude Code-credentials-e8dc196c"))
-    assert.ok(services.includes("Claude Code-credentials-b28bbb7c"))
-    assert.equal(services.length, 3)
+describe("primary-only keychain policy", () => {
+  it("exports the primary Claude Code service name", () => {
+    assert.equal(PRIMARY_SERVICE, "Claude Code-credentials")
   })
 
-  it("puts the primary service first", () => {
-    assert.equal(
-      extractServicesFromDump(SAMPLE_DUMP)[0],
-      "Claude Code-credentials",
+  it("production code no longer scans suffixed Claude Code services", () => {
+    const source = readFileSync(
+      new URL("./keychain.ts", import.meta.url),
+      "utf8",
     )
-  })
-
-  it("deduplicates entries that appear twice (svce and blob line)", () => {
-    const services = extractServicesFromDump(SAMPLE_DUMP)
-    assert.equal(
-      services.filter((s) => s === "Claude Code-credentials").length,
-      1,
-    )
-    assert.equal(
-      services.filter((s) => s === "Claude Code-credentials-b28bbb7c").length,
-      1,
-    )
-  })
-
-  it("ignores non-Claude-Code keychain entries", () => {
-    const dump = `
-    0x00000007 <blob>="Some Other Service"
-    "svce"<blob>="Some Other Service"
-    0x00000007 <blob>="Claude Code-credentials"
-    `
-    assert.deepEqual(extractServicesFromDump(dump), ["Claude Code-credentials"])
-  })
-
-  it("returns empty array for a dump with no Claude Code entries", () => {
-    assert.deepEqual(extractServicesFromDump("no relevant entries here"), [])
-  })
-
-  it("does not match uppercase hex suffixes", () => {
-    assert.deepEqual(
-      extractServicesFromDump(
-        `"svce"<blob>="Claude Code-credentials-B28BBB7C"`,
-      ),
-      [],
-    )
-  })
-
-  it("does not match arbitrary word suffixes", () => {
-    assert.deepEqual(
-      extractServicesFromDump(
-        `"svce"<blob>="Claude Code-credentials-myaccount"`,
-      ),
-      [],
-    )
-  })
-
-  it("handles a dump where primary service appears after suffixed ones", () => {
-    const dump = `
-    "svce"<blob>="Claude Code-credentials-b28bbb7c"
-    "svce"<blob>="Claude Code-credentials"
-    `
-    const services = extractServicesFromDump(dump)
-    assert.equal(services[0], "Claude Code-credentials")
-    assert.equal(services[1], "Claude Code-credentials-b28bbb7c")
-  })
-
-  it("handles all five real-world suffixes from a populated keychain", () => {
-    const dump = `
-    "svce"<blob>="Claude Code-credentials"
-    "svce"<blob>="Claude Code-credentials-e8dc196c"
-    "svce"<blob>="Claude Code-credentials-3519e293"
-    "svce"<blob>="Claude Code-credentials-b3d57fec"
-    "svce"<blob>="Claude Code-credentials-b28bbb7c"
-    `
-    const services = extractServicesFromDump(dump)
-    assert.equal(services.length, 5)
-    assert.equal(services[0], "Claude Code-credentials")
+    assert.doesNotMatch(source, /dump-keychain/)
+    assert.doesNotMatch(source, /Claude Code-credentials\(\?:-\[0-9a-f\]\+\)\?/)
+    assert.doesNotMatch(source, /listClaudeKeychainServices/)
   })
 })
 

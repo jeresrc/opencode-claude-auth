@@ -49,25 +49,12 @@ export function toOAuthCredential(
   }
 }
 
-function selectAccount(
+function selectPrimaryAccount(
   accounts: readonly ClaudeAccount[],
-  source: string | undefined,
 ): ClaudeAccount {
-  if (accounts.length === 0) {
-    throw new Error("No Claude Code accounts found")
-  }
-
-  if (source) {
-    const selected = accounts.find((account) => account.source === source)
-    if (!selected) {
-      throw new Error(`Claude Code account not found for source: ${source}`)
-    }
-    return selected
-  }
-
-  if (accounts.length === 1) return accounts[0]
-
-  throw new Error("Claude Code account selection is required")
+  const primary = accounts[0]
+  if (!primary) throw new Error("No Claude Code accounts found")
+  return primary
 }
 
 function sourceFromMetadata(credential: {
@@ -85,27 +72,11 @@ export function registerAnthropicIntegration(
   deps: Partial<IntegrationDeps> = {},
 ): void {
   const resolvedDeps = { ...defaultDeps, ...deps }
-  const accountsForPrompts = resolvedDeps.readAccounts()
+  resolvedDeps.readAccounts()
 
   draft.update(ANTHROPIC_INTEGRATION_ID, (integration) => {
     integration.name = "Anthropic"
   })
-
-  const prompts =
-    accountsForPrompts.length > 1
-      ? [
-          {
-            type: "select" as const,
-            key: "source",
-            message: "Select Claude Code account",
-            options: accountsForPrompts.map((account) => ({
-              label: account.label,
-              value: account.source,
-              hint: account.source,
-            })),
-          },
-        ]
-      : undefined
 
   const registration = {
     integrationID: ANTHROPIC_INTEGRATION_ID,
@@ -113,15 +84,11 @@ export function registerAnthropicIntegration(
       id: CLAUDE_CODE_METHOD_ID,
       type: "oauth" as const,
       label: "Claude Code credentials",
-      ...(prompts ? { prompts } : {}),
     },
-    authorize: (inputs) =>
+    authorize: (_inputs) =>
       Effect.try({
         try: () => {
-          const account = selectAccount(
-            resolvedDeps.readAccounts(),
-            inputs.source,
-          )
+          const account = selectPrimaryAccount(resolvedDeps.readAccounts())
 
           return {
             mode: "auto" as const,
@@ -139,7 +106,14 @@ export function registerAnthropicIntegration(
       Effect.try({
         try: () => {
           const source = sourceFromMetadata(credential)
-          const account = selectAccount(resolvedDeps.readAccounts(), source)
+          const account = resolvedDeps
+            .readAccounts()
+            .find((target) => target.source === source)
+          if (!account) {
+            throw new Error(
+              `Claude Code account not found for source: ${source}`,
+            )
+          }
           const refreshed = resolvedDeps.refreshIfNeeded(account, {
             reloadSource: true,
           })

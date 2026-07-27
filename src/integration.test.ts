@@ -98,14 +98,11 @@ describe("Anthropic integration registration", () => {
     })
   })
 
-  it("updates Anthropic and registers a Claude Code OAuth method with source prompts for multiple accounts", () => {
+  it("registers a primary-only Claude Code OAuth method with no account prompt", () => {
     const { draft, integration, registration } = createDraft()
 
     registerAnthropicIntegration(draft, {
-      readAccounts: () => [
-        account("Claude Code-credentials", "Claude Pro"),
-        account("Claude Code-credentials-2", "Claude Max"),
-      ],
+      readAccounts: () => [account("Claude Code-credentials", "Claude Pro")],
       refreshIfNeeded: () => null,
     })
 
@@ -115,25 +112,6 @@ describe("Anthropic integration registration", () => {
       id: CLAUDE_CODE_METHOD_ID,
       type: "oauth",
       label: "Claude Code credentials",
-      prompts: [
-        {
-          type: "select",
-          key: "source",
-          message: "Select Claude Code account",
-          options: [
-            {
-              label: "Claude Pro",
-              value: "Claude Code-credentials",
-              hint: "Claude Code-credentials",
-            },
-            {
-              label: "Claude Max",
-              value: "Claude Code-credentials-2",
-              hint: "Claude Code-credentials-2",
-            },
-          ],
-        },
-      ],
     })
   })
 
@@ -180,40 +158,33 @@ describe("Anthropic integration registration", () => {
     })
   })
 
-  it("rereads accounts for authorize and fails invalid selections or missing accounts", async () => {
+  it("authorizes the primary account only and ignores account-selection inputs", async () => {
     const { draft, registration } = createDraft()
     let reads = 0
-    const first = account("first", "First")
-    const second = account("second", "Second")
+    const primary = account("Claude Code-credentials", "Claude Pro")
 
     registerAnthropicIntegration(draft, {
       readAccounts: () => {
         reads += 1
-        return reads === 1 ? [first, second] : [second]
+        return [primary]
       },
       refreshIfNeeded: () => null,
     })
 
-    assert.equal(reads, 1, "registration reads once for prompt construction")
-    await assert.rejects(
-      Effect.runPromise(registration().authorize({ source: "first" })),
-      {
-        message: /Claude Code account not found/,
-      },
+    const authorization = await Effect.runPromise(
+      registration().authorize({ source: "Claude Code-credentials-deadbeef" }),
     )
-    assert.equal(reads, 2, "authorize rereads live accounts")
 
-    const noAccounts = createDraft()
-    registerAnthropicIntegration(noAccounts.draft, {
-      readAccounts: () => [],
-      refreshIfNeeded: () => null,
+    assert.equal(authorization.mode, "auto")
+    assert.deepEqual(await Effect.runPromise(authorization.callback), {
+      type: "oauth",
+      methodID: CLAUDE_CODE_METHOD_ID,
+      access: "access-Claude Code-credentials",
+      refresh: "refresh-Claude Code-credentials",
+      expires: 1_700_000_000_000,
+      metadata: { source: "Claude Code-credentials" },
     })
-    await assert.rejects(
-      Effect.runPromise(noAccounts.registration().authorize({})),
-      {
-        message: /No Claude Code accounts found/,
-      },
-    )
+    assert.equal(reads, 2)
   })
 
   it("refresh reloads the selected account instead of reusing a stale stored credential", async () => {

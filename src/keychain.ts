@@ -17,7 +17,7 @@ export interface ClaudeAccount {
   credentials: ClaudeCredentials
 }
 
-const PRIMARY_SERVICE = "Claude Code-credentials"
+export const PRIMARY_SERVICE = "Claude Code-credentials"
 
 export function parseCredentials(raw: string): ClaudeCredentials | null {
   let parsed: unknown
@@ -135,44 +135,6 @@ function readKeychainService(serviceName: string): string | null {
   }
 }
 
-function listClaudeKeychainServices(): string[] {
-  try {
-    const dump = execSync("security dump-keychain", {
-      timeout: 5000,
-      maxBuffer: 1024 * 1024 * 10, // 10 MB
-      encoding: "utf-8",
-    })
-
-    const services: string[] = []
-    const seen = new Set<string>()
-
-    const re = /"Claude Code-credentials(?:-[0-9a-f]+)?"/g
-    let m = re.exec(dump)
-    while (m !== null) {
-      const svc = m[0].slice(1, -1)
-      if (!seen.has(svc)) {
-        seen.add(svc)
-        services.push(svc)
-      }
-      m = re.exec(dump)
-    }
-
-    const ordered: string[] = []
-    if (seen.has(PRIMARY_SERVICE)) ordered.push(PRIMARY_SERVICE)
-    for (const svc of services) {
-      if (svc !== PRIMARY_SERVICE) ordered.push(svc)
-    }
-    log("keychain_list", { servicesFound: ordered })
-    return ordered
-  } catch (err) {
-    log("keychain_list", {
-      error: "Failed to list keychain services",
-      message: err instanceof Error ? err.message : String(err),
-    })
-    return [PRIMARY_SERVICE]
-  }
-}
-
 function readCredentialsFile(): ClaudeCredentials | null {
   try {
     const credPath = join(homedir(), ".claude", ".credentials.json")
@@ -216,29 +178,19 @@ export function readAllClaudeAccounts(): ClaudeAccount[] {
     return [{ label, source: "file", credentials: creds }]
   }
 
-  const services = listClaudeKeychainServices()
-  const rawAccounts: Array<{ source: string; credentials: ClaudeCredentials }> =
-    []
-
-  for (const svc of services) {
-    const raw = readKeychainService(svc)
-    if (!raw) continue
+  const raw = readKeychainService(PRIMARY_SERVICE)
+  if (raw) {
     const creds = parseCredentials(raw)
-    if (!creds) continue
-    rawAccounts.push({ source: svc, credentials: creds })
+    if (creds) {
+      const [label] = buildAccountLabels([creds])
+      return [{ label, source: PRIMARY_SERVICE, credentials: creds }]
+    }
   }
 
-  if (rawAccounts.length === 0) {
-    const creds = readCredentialsFile()
-    if (creds) rawAccounts.push({ source: "file", credentials: creds })
-  }
-
-  const labels = buildAccountLabels(rawAccounts.map((a) => a.credentials))
-  return rawAccounts.map((a, i) => ({
-    label: labels[i],
-    source: a.source,
-    credentials: a.credentials,
-  }))
+  const creds = readCredentialsFile()
+  if (!creds) return []
+  const [label] = buildAccountLabels([creds])
+  return [{ label, source: "file", credentials: creds }]
 }
 
 export function updateCredentialBlob(
