@@ -1,4 +1,3 @@
-import { Model as LLMModel } from "@opencode-ai/ai"
 import type { FinishReasonDetails, LLMEvent, Model } from "@opencode-ai/ai"
 import type {
   Definition as ProviderPackageDefinition,
@@ -8,9 +7,12 @@ import { AnthropicMessages } from "@opencode-ai/ai/protocols/anthropic-messages"
 import type { AnthropicMessagesBody } from "@opencode-ai/ai/protocols/anthropic-messages"
 import {
   Auth,
+  Endpoint,
   HttpTransport,
+  Protocol,
   RequestExecutor,
-  type RouteShape,
+  Route,
+  type ProtocolDef as ProtocolShape,
   type TransportDef as Transport,
 } from "@opencode-ai/ai/route"
 import { Effect, Layer, Stream } from "effect"
@@ -87,27 +89,50 @@ export function normalizeTerminalFinishReason(event: LLMEvent): LLMEvent {
   if (event.type !== "step-finish" && event.type !== "finish") return event
 
   const reason = "reason" in event ? event.reason : undefined
-  if (typeof reason === "object" && reason !== null && "normalized" in reason) {
+  if (reason !== undefined) {
     return event
   }
 
   return { ...event, reason: UNKNOWN_FINISH_REASON }
 }
 
-export function withTerminalFinishReasonFallback<Body, Prepared>(
-  route: RouteShape<Body, Prepared>,
-): RouteShape<Body, Prepared> {
-  const wrapped: RouteShape<Body, Prepared> = {
-    ...route,
-    with: (patch) => withTerminalFinishReasonFallback(route.with(patch)),
-    model: (input) => LLMModel.update(route.model(input), { route: wrapped }),
-    streamPrepared: (prepared, request, runtime) =>
-      route
-        .streamPrepared(prepared, request, runtime)
-        .pipe(Stream.map(normalizeTerminalFinishReason)),
-  }
+const normalizeTerminalEvents = (
+  events: ReadonlyArray<LLMEvent>,
+): ReadonlyArray<LLMEvent> => events.map(normalizeTerminalFinishReason)
 
-  return wrapped
+type ProtocolStepResult<Body, Frame, Event, State> = ReturnType<
+  ProtocolShape<Body, Frame, Event, State>["stream"]["step"]
+>
+
+export function withTerminalFinishReasonFallback<Body, Frame, Event, State>(
+  protocol: ProtocolShape<Body, Frame, Event, State>,
+): ProtocolShape<Body, Frame, Event, State> {
+  const onHalt = protocol.stream.onHalt
+  // Pinned Effect versions differ between plugin (.83) and @opencode-ai/ai (.98);
+  // keep the cast at the operator boundary while typing the event tuple above.
+  const mapStepEvents = Effect.map(
+    ([nextState, events]: readonly [State, ReadonlyArray<LLMEvent>]): readonly [
+      State,
+      ReadonlyArray<LLMEvent>,
+    ] => [nextState, normalizeTerminalEvents(events)],
+  ) as unknown as (
+    effect: ProtocolStepResult<Body, Frame, Event, State>,
+  ) => ProtocolStepResult<Body, Frame, Event, State>
+  const step: ProtocolShape<Body, Frame, Event, State>["stream"]["step"] = (
+    state,
+    event,
+  ) => protocol.stream.step(state, event).pipe(mapStepEvents)
+
+  const stream =
+    onHalt === undefined
+      ? { ...protocol.stream, step }
+      : {
+          ...protocol.stream,
+          step,
+          onHalt: (state: State) => normalizeTerminalEvents(onHalt(state)),
+        }
+
+  return Protocol.make({ ...protocol, stream })
 }
 
 export const model = ((modelID: string, settings: Settings): Model => {
@@ -117,15 +142,18 @@ export const model = ((modelID: string, settings: Settings): Model => {
     executorLayer(accessToken, settings.fetch),
   )
 
-  const route = withTerminalFinishReasonFallback(
-    AnthropicMessages.route.with({
-      id: AnthropicMessages.route.id,
-      provider: "anthropic",
-      endpoint: {
-        baseURL: settings.baseURL ?? AnthropicMessages.DEFAULT_BASE_URL,
-      },
-      auth: Auth.bearer(accessToken),
-      transport,
+  const route = Route.make({
+    id: AnthropicMessages.route.id,
+    provider: "anthropic",
+    providerMetadataKey: AnthropicMessages.route.providerMetadataKey,
+    protocol: withTerminalFinishReasonFallback(AnthropicMessages.protocol),
+    endpoint: Endpoint.path(AnthropicMessages.PATH, {
+      baseURL: settings.baseURL ?? AnthropicMessages.DEFAULT_BASE_URL,
+    }),
+    auth: Auth.bearer(accessToken),
+    transport,
+    headers: () => ({ "anthropic-version": "2023-06-01" }),
+    defaults: {
       headers:
         settings.headers === undefined ? undefined : { ...settings.headers },
       http:
@@ -133,8 +161,8 @@ export const model = ((modelID: string, settings: Settings): Model => {
           ? undefined
           : { body: { ...settings.body } },
       limits: settings.limits,
-    }),
-  )
+    },
+  })
 
   return route.model({ id: modelID })
 }) satisfies ProviderPackageDefinition<Settings>["model"]

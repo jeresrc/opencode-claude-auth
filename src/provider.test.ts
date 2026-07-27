@@ -355,7 +355,7 @@ assert.deepEqual(terminal.map((event) => event.reason), [
 `)
 })
 
-test("terminal fallback normalizes missing route terminal reasons to structured unknown", async () => {
+test("protocol fallback normalizes missing route terminal reasons before route guards", async () => {
   await runBun(String.raw`
 import assert from "node:assert/strict"
 import { Effect, Layer, Schema, Stream } from "effect"
@@ -366,11 +366,8 @@ import { withTerminalFinishReasonFallback } from "./src/provider.ts"
 const frames = [
   { type: "step-finish", index: 0 },
   { type: "finish" },
-  // Keeps LLMClient's terminal guard satisfied while exercising malformed
-  // terminal events before the provider-local fallback maps them.
-  { type: "provider-error", message: "terminal sentinel" },
 ]
-const protocol = Protocol.make({
+const protocol = withTerminalFinishReasonFallback(Protocol.make({
   id: "fallback-test",
   body: {
     schema: Schema.Struct({}),
@@ -385,8 +382,8 @@ const protocol = Protocol.make({
     initial: () => undefined,
     step: (state, event) => Effect.succeed([state, [event]]),
   },
-})
-const route = withTerminalFinishReasonFallback(Route.make({
+}))
+const route = Route.make({
   id: "fallback-test",
   provider: "anthropic",
   protocol,
@@ -396,7 +393,7 @@ const route = withTerminalFinishReasonFallback(Route.make({
     prepare: () => Effect.succeed({}),
     frames: () => Stream.fromIterable(frames),
   },
-}))
+})
 const selected = route.model({ id: "claude-sonnet-4-6" })
 const events = await Effect.runPromise(
   Stream.runCollect(LLM.stream(LLM.request({ model: selected, prompt: "hello" }))).pipe(
@@ -415,10 +412,90 @@ const terminal = events.filter(
   (event) => event.type === "step-finish" || event.type === "finish",
 )
 
+assert.equal(events.some((event) => event.type === "provider-error"), false)
 assert.deepEqual(terminal, [
   { type: "step-finish", index: 0, reason: { normalized: "unknown" } },
   { type: "finish", reason: { normalized: "unknown" } },
 ])
+`)
+})
+
+test("protocol fallback rejects present invalid finish reasons and preserves valid reasons", async () => {
+  await runBun(String.raw`
+import assert from "node:assert/strict"
+import { Effect, Layer, Schema, Stream } from "effect"
+import { LLM, LLMClient } from "@opencode-ai/ai"
+import { Endpoint, Protocol, RequestExecutor, Route } from "@opencode-ai/ai/route"
+import { withTerminalFinishReasonFallback } from "./src/provider.ts"
+
+function routeFor(frames) {
+  const protocol = withTerminalFinishReasonFallback(Protocol.make({
+    id: "fallback-test",
+    body: {
+      schema: Schema.Struct({}),
+      from: () => Effect.succeed({}),
+    },
+    stream: {
+      event: Schema.Struct({
+        type: Schema.String,
+        index: Schema.optional(Schema.Number),
+        reason: Schema.optional(Schema.Unknown),
+      }),
+      initial: () => undefined,
+      step: (state, event) => Effect.succeed([state, [event]]),
+    },
+  }))
+
+  return Route.make({
+    id: "fallback-test",
+    provider: "anthropic",
+    protocol,
+    endpoint: Endpoint.path("/messages", { baseURL: "https://provider.test/v1" }),
+    transport: {
+      id: "fallback-test",
+      prepare: () => Effect.succeed({}),
+      frames: () => Stream.fromIterable(frames),
+    },
+  }).model({ id: "claude-sonnet-4-6" })
+}
+
+const run = (frames) => Effect.runPromise(
+  Stream.runCollect(LLM.stream(LLM.request({ model: routeFor(frames), prompt: "hello" }))).pipe(
+    Effect.provide(
+      LLMClient.layer.pipe(
+        Layer.provide(
+          Layer.succeed(RequestExecutor.Service, {
+            execute: () => Effect.die(new Error("global executor should not be used")),
+          }),
+        ),
+      ),
+    ),
+  ),
+)
+
+await assert.rejects(
+  () => run([{ type: "finish", reason: null }]),
+  /terminal finish event/,
+)
+await assert.rejects(
+  () => run([{ type: "finish", reason: "stop" }]),
+  /terminal finish event/,
+)
+await assert.rejects(
+  () => run([{ type: "finish", reason: { raw: "stop" } }]),
+  /terminal finish event/,
+)
+
+const reason = { normalized: "stop", raw: "end_turn" }
+const events = await run([
+  { type: "step-finish", index: 0, reason },
+  { type: "finish", reason },
+])
+const terminal = events.filter(
+  (event) => event.type === "step-finish" || event.type === "finish",
+)
+
+assert.deepEqual(terminal.map((event) => event.reason), [reason, reason])
 `)
 })
 
