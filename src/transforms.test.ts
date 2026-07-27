@@ -792,6 +792,94 @@ describe("transforms", () => {
       const result = repairToolPairs(messages)
       assert.deepEqual(result, messages)
     })
+
+    it("removes pairs whose tool_result is not in the immediately following message", () => {
+      const messages = [
+        {
+          role: "assistant",
+          content: [{ type: "tool_use", id: "toolu_gap", name: "search" }],
+        },
+        {
+          role: "user",
+          content: [{ type: "text", text: "compaction summary" }],
+        },
+        {
+          role: "user",
+          content: [
+            { type: "tool_result", tool_use_id: "toolu_gap", content: "late" },
+          ],
+        },
+      ]
+
+      assert.deepEqual(repairToolPairs(messages), [
+        {
+          role: "user",
+          content: [{ type: "text", text: "compaction summary" }],
+        },
+      ])
+    })
+
+    it("keeps adjacent pairs while dropping results split into a later message", () => {
+      const messages = [
+        {
+          role: "assistant",
+          content: [
+            { type: "tool_use", id: "toolu_a", name: "search" },
+            { type: "tool_use", id: "toolu_b", name: "read" },
+          ],
+        },
+        {
+          role: "user",
+          content: [
+            { type: "tool_result", tool_use_id: "toolu_a", content: "res_a" },
+          ],
+        },
+        {
+          role: "user",
+          content: [
+            { type: "tool_result", tool_use_id: "toolu_b", content: "res_b" },
+          ],
+        },
+      ]
+
+      assert.deepEqual(repairToolPairs(messages), [
+        {
+          role: "assistant",
+          content: [{ type: "tool_use", id: "toolu_a", name: "search" }],
+        },
+        {
+          role: "user",
+          content: [
+            { type: "tool_result", tool_use_id: "toolu_a", content: "res_a" },
+          ],
+        },
+      ])
+    })
+
+    it("removes reversed pairs where the tool_result precedes its tool_use", () => {
+      const messages = [
+        {
+          role: "user",
+          content: [
+            { type: "tool_result", tool_use_id: "toolu_rev", content: "early" },
+          ],
+        },
+        {
+          role: "assistant",
+          content: [
+            { type: "text", text: "answer" },
+            { type: "tool_use", id: "toolu_rev", name: "search" },
+          ],
+        },
+      ]
+
+      assert.deepEqual(repairToolPairs(messages), [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "answer" }],
+        },
+      ])
+    })
   })
 
   it("transformBody removes orphaned tool_use blocks from messages", () => {

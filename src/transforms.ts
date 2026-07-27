@@ -38,54 +38,55 @@ export function decodeReplayableBodyText(
 }
 
 export function repairToolPairs(messages: Message[]): Message[] {
-  // Collect all tool_use ids and tool_result tool_use_ids
-  const toolUseIds = new Set<string>()
-  const toolResultIds = new Set<string>()
+  const useMsgIndex = new Map<string, number>()
+  const resultMsgIndex = new Map<string, number>()
 
-  for (const message of messages) {
-    if (!Array.isArray(message.content)) continue
+  messages.forEach((message, index) => {
+    if (!Array.isArray(message.content)) return
     for (const block of message.content) {
       const id = block["id"]
       if (block.type === "tool_use" && typeof id === "string") {
-        toolUseIds.add(id)
+        if (!useMsgIndex.has(id)) useMsgIndex.set(id, index)
       }
+
       const toolUseId = block["tool_use_id"]
       if (block.type === "tool_result" && typeof toolUseId === "string") {
-        toolResultIds.add(toolUseId)
+        if (!resultMsgIndex.has(toolUseId)) resultMsgIndex.set(toolUseId, index)
       }
     }
+  })
+
+  const isAdjacentPair = (id: string): boolean => {
+    const useIndex = useMsgIndex.get(id)
+    return useIndex !== undefined && resultMsgIndex.get(id) === useIndex + 1
   }
 
-  // Find orphaned IDs
-  const orphanedUses = new Set<string>()
-  for (const id of toolUseIds) {
-    if (!toolResultIds.has(id)) orphanedUses.add(id)
-  }
-  const orphanedResults = new Set<string>()
-  for (const id of toolResultIds) {
-    if (!toolUseIds.has(id)) orphanedResults.add(id)
-  }
+  const needsRepair =
+    [...useMsgIndex.keys()].some((id) => !isAdjacentPair(id)) ||
+    [...resultMsgIndex.keys()].some((id) => !isAdjacentPair(id))
+  if (!needsRepair) return messages
 
-  // Early return if nothing to fix
-  if (orphanedUses.size === 0 && orphanedResults.size === 0) {
-    return messages
-  }
-
-  // Filter orphaned blocks and remove messages with empty content arrays
   return messages
-    .map((message) => {
+    .map((message, index) => {
       if (!Array.isArray(message.content)) return message
+
       const filtered = message.content.filter((block) => {
         const id = block["id"]
         if (block.type === "tool_use" && typeof id === "string") {
-          return !orphanedUses.has(id)
+          return isAdjacentPair(id) && useMsgIndex.get(id) === index
         }
+
         const toolUseId = block["tool_use_id"]
         if (block.type === "tool_result" && typeof toolUseId === "string") {
-          return !orphanedResults.has(toolUseId)
+          return (
+            isAdjacentPair(toolUseId) &&
+            resultMsgIndex.get(toolUseId) === index
+          )
         }
+
         return true
       })
+
       return { ...message, content: filtered }
     })
     .filter(
