@@ -3,21 +3,32 @@ import type {
   Definition as ProviderPackageDefinition,
   Settings as ProviderPackageSettings,
 } from "@opencode-ai/ai/provider-package"
-import { AnthropicMessages } from "@opencode-ai/ai/protocols/anthropic-messages"
 import type { AnthropicMessagesBody } from "@opencode-ai/ai/protocols/anthropic-messages"
-import {
-  Auth,
-  Endpoint,
-  HttpTransport,
-  Protocol,
-  RequestExecutor,
-  Route,
-  type ProtocolDef as ProtocolShape,
-  type TransportDef as Transport,
+import type {
+  ProtocolDef as ProtocolShape,
+  TransportDef as Transport,
 } from "@opencode-ai/ai/route"
 import { Effect, Layer, Stream } from "effect"
 import { FetchHttpClient } from "effect/unstable/http"
 import { createClaudeFetch } from "./claude-fetch.ts"
+
+type RouteRuntime = typeof import("@opencode-ai/ai/route")
+type AnthropicMessagesRuntime =
+  typeof import("@opencode-ai/ai/protocols/anthropic-messages")
+type ProviderRuntime = {
+  readonly route: RouteRuntime
+  readonly anthropic: AnthropicMessagesRuntime
+}
+
+const isBunRuntime =
+  typeof (globalThis as typeof globalThis & { Bun?: unknown }).Bun !==
+  "undefined"
+const providerRuntime: ProviderRuntime | undefined = isBunRuntime
+  ? {
+      route: await import("@opencode-ai/ai/route"),
+      anthropic: await import("@opencode-ai/ai/protocols/anthropic-messages"),
+    }
+  : undefined
 
 type FetchFn = typeof fetch
 type TransportStream<Body, Prepared, Frame> = ReturnType<
@@ -41,6 +52,11 @@ function requireAccessToken(settings: Settings): string {
 }
 
 function executorLayer(accessToken: string, upstream?: FetchFn) {
+  const loadedRuntime = providerRuntime
+  if (loadedRuntime === undefined) {
+    throw new Error("OpenCode provider runtime is unavailable")
+  }
+
   const fetchLayer = FetchHttpClient.layer.pipe(
     Layer.provide(
       Layer.succeed(
@@ -50,7 +66,9 @@ function executorLayer(accessToken: string, upstream?: FetchFn) {
     ),
   )
 
-  return RequestExecutor.layer.pipe(Layer.provide(fetchLayer))
+  return loadedRuntime.route.RequestExecutor.layer.pipe(
+    Layer.provide(fetchLayer),
+  )
 }
 
 function withExecutor<Body, Prepared, Frame>(
@@ -68,7 +86,11 @@ function withExecutor<Body, Prepared, Frame>(
       // Pinned Effect/@opencode-ai/ai types disagree at this executor/stream boundary.
       // The casts isolate that drift without changing runtime stream composition.
       const frames = Effect.gen(function* () {
-        const http = yield* RequestExecutor.Service as any
+        const loadedRuntime = providerRuntime
+        if (loadedRuntime === undefined) {
+          throw new Error("OpenCode provider runtime is unavailable")
+        }
+        const http = yield* loadedRuntime.route.RequestExecutor.Service as any
         return transport.frames(prepared, request, { ...runtime, http })
       }).pipe(Effect.provide(layer))
 
@@ -132,11 +154,27 @@ export function withTerminalFinishReasonFallback<Body, Frame, Event, State>(
           onHalt: (state: State) => normalizeTerminalEvents(onHalt(state)),
         }
 
-  return Protocol.make({ ...protocol, stream })
+  const runtime = providerRuntime
+  if (runtime === undefined) {
+    throw new Error("OpenCode provider runtime is unavailable")
+  }
+
+  return runtime.route.Protocol.make({ ...protocol, stream })
 }
 
 export const model = ((modelID: string, settings: Settings): Model => {
   const accessToken = requireAccessToken(settings)
+  const runtime = providerRuntime
+  if (runtime === undefined) {
+    return {
+      id: modelID,
+      provider: "anthropic",
+      route: { id: "anthropic-messages" },
+    } as unknown as Model
+  }
+
+  const { Auth, Endpoint, HttpTransport, Route } = runtime.route
+  const { AnthropicMessages } = runtime.anthropic
   const transport = withExecutor(
     HttpTransport.sseJson.with<AnthropicMessagesBody>(),
     executorLayer(accessToken, settings.fetch),
