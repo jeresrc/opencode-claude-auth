@@ -280,6 +280,16 @@ function sanitizeErrorMessage(message: string): string {
   return sanitized
 }
 
+function logAuthRecoveryFailure(
+  phase: "reload" | "refresh",
+  err: unknown,
+): void {
+  log("auth_recovery_failed", {
+    phase,
+    error: err instanceof Error ? err.name : typeof err,
+  })
+}
+
 export function createClaudeFetch(options: ClaudeFetchOptions): FetchFn {
   const upstream = options.upstream ?? fetch
   const sleep = options.sleep ?? defaultSleep
@@ -297,6 +307,12 @@ export function createClaudeFetch(options: ClaudeFetchOptions): FetchFn {
     const method =
       requestInit.method ??
       (input instanceof Request ? input.method : undefined)
+    const signal =
+      requestInit.signal !== undefined
+        ? requestInit.signal
+        : input instanceof Request
+          ? input.signal
+          : undefined
 
     let activeAccessToken = options.accessToken
     let headers = buildRequestHeaders(
@@ -314,7 +330,10 @@ export function createClaudeFetch(options: ClaudeFetchOptions): FetchFn {
       .filter(Boolean)
     log("fetch_headers_built", { headerKeys, betas, modelId })
 
-    const send = async (accessToken: string): Promise<Response> => {
+    const send = async (
+      accessToken: string,
+      retryAttempts = effectiveRetries,
+    ): Promise<Response> => {
       headers = buildRequestHeaders(
         input,
         requestInit,
@@ -327,6 +346,7 @@ export function createClaudeFetch(options: ClaudeFetchOptions): FetchFn {
         method,
         body,
         headers,
+        signal,
       } as RequestInit & {
         duplex?: "half"
       }
@@ -337,7 +357,7 @@ export function createClaudeFetch(options: ClaudeFetchOptions): FetchFn {
       return await fetchWithRetry(
         requestUrl,
         retryInit,
-        effectiveRetries,
+        retryAttempts,
         upstream,
         sleep,
       )
@@ -348,15 +368,31 @@ export function createClaudeFetch(options: ClaudeFetchOptions): FetchFn {
     log("fetch_response", { status: response.status, modelId, retryAttempt: 0 })
 
     if (response.status === 401 && isReplayable && options.authRecovery) {
-      const reloaded = options.authRecovery.reload()
-      const retryCreds =
-        reloaded && reloaded.accessToken !== activeAccessToken
-          ? reloaded
-          : options.authRecovery.refresh()
+      let retryCreds: ClaudeCredentials | null = null
+      let recoveryFailed = false
+
+      try {
+        const reloaded = options.authRecovery.reload()
+        if (reloaded && reloaded.accessToken !== activeAccessToken) {
+          retryCreds = reloaded
+        }
+      } catch (err) {
+        recoveryFailed = true
+        logAuthRecoveryFailure("reload", err)
+      }
+
+      if (!retryCreds && !recoveryFailed) {
+        try {
+          retryCreds = options.authRecovery.refresh()
+        } catch (err) {
+          recoveryFailed = true
+          logAuthRecoveryFailure("refresh", err)
+        }
+      }
 
       if (retryCreds && retryCreds.accessToken !== activeAccessToken) {
         activeAccessToken = retryCreds.accessToken
-        response = await send(activeAccessToken)
+        response = await send(activeAccessToken, 1)
         log("fetch_response", {
           status: response.status,
           modelId,
@@ -388,7 +424,7 @@ export function createClaudeFetch(options: ClaudeFetchOptions): FetchFn {
 
       response = await fetchWithRetry(
         requestUrl,
-        { ...requestInit, method, body, headers: retryHeaders },
+        { ...requestInit, method, body, headers: retryHeaders, signal },
         effectiveRetries,
         upstream,
         sleep,

@@ -464,10 +464,23 @@ export function forceRefreshPrimaryCredentials(
     return null
   }
 
-  account.credentials = oauthCreds
-  if (!writeBackCredentials(account.source, oauthCreds)) {
-    log("force_refresh_writeback_failed", { source: account.source })
+  let wroteBack = false
+  try {
+    wroteBack = writeBackCredentials(account.source, oauthCreds)
+  } catch (err) {
+    log("force_refresh_writeback_failed", {
+      source: account.source,
+      error: err instanceof Error ? err.name : typeof err,
+    })
+    return null
   }
+
+  if (!wroteBack) {
+    log("force_refresh_writeback_failed", { source: account.source })
+    return null
+  }
+
+  account.credentials = oauthCreds
   accountCacheMap.set(account.source, {
     creds: oauthCreds,
     cachedAt: Date.now(),

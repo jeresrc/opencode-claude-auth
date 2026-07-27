@@ -439,6 +439,205 @@ describe("Claude OAuth fetch pipeline", () => {
     assert.equal(calls, 2)
   })
 
+  it("returns the original 401 when auth reload throws without consuming the body", async () => {
+    let calls = 0
+    let refreshCalls = 0
+    const upstream = (async () => {
+      calls += 1
+      return new Response("unauthorized reload body", { status: 401 })
+    }) as typeof fetch
+    const claudeFetch = createClaudeFetch({
+      accessToken: "rejected-token",
+      upstream,
+      retries: 1,
+      authRecovery: {
+        reload: () => {
+          throw new Error("reload failed with secret-token")
+        },
+        refresh: () => {
+          refreshCalls += 1
+          return {
+            accessToken: "oauth-refreshed-token",
+            refreshToken: "new-refresh",
+            expiresAt: Date.now() + 10 * 60_000,
+          }
+        },
+      },
+    })
+
+    const response = await claudeFetch(
+      "https://api.anthropic.com/v1/messages",
+      {
+        method: "POST",
+        body: JSON.stringify({ model: "claude-sonnet-4-6", messages: [] }),
+      },
+    )
+
+    assert.equal(response.status, 401)
+    assert.equal(await response.text(), "unauthorized reload body")
+    assert.equal(calls, 1)
+    assert.equal(refreshCalls, 0)
+  })
+
+  it("returns the original 401 when auth refresh throws without consuming the body", async () => {
+    let calls = 0
+    const upstream = (async () => {
+      calls += 1
+      return new Response("unauthorized refresh body", { status: 401 })
+    }) as typeof fetch
+    const claudeFetch = createClaudeFetch({
+      accessToken: "rejected-token",
+      upstream,
+      retries: 1,
+      authRecovery: {
+        reload: () => ({
+          accessToken: "rejected-token",
+          refreshToken: "refresh-token",
+          expiresAt: Date.now() + 10 * 60_000,
+        }),
+        refresh: () => {
+          throw new Error("refresh failed with secret-token")
+        },
+      },
+    })
+
+    const response = await claudeFetch(
+      "https://api.anthropic.com/v1/messages",
+      {
+        method: "POST",
+        body: JSON.stringify({ model: "claude-sonnet-4-6", messages: [] }),
+      },
+    )
+
+    assert.equal(response.status, 401)
+    assert.equal(await response.text(), "unauthorized refresh body")
+    assert.equal(calls, 1)
+  })
+
+  for (const status of [429, 529] as const) {
+    it(`does not rate-limit retry the recovered auth attempt when it returns ${status}`, async () => {
+      let calls = 0
+      const slept: number[] = []
+      const upstream = (async () => {
+        calls += 1
+        if (calls === 1) {
+          return new Response("unauthorized", { status: 401 })
+        }
+        return new Response(`recovered ${status}`, { status })
+      }) as typeof fetch
+      const claudeFetch = createClaudeFetch({
+        accessToken: "rejected-token",
+        upstream,
+        retries: 4,
+        sleep: async (ms) => {
+          slept.push(ms)
+        },
+        authRecovery: {
+          reload: () => ({
+            accessToken: "rotated-token",
+            refreshToken: "rotated-refresh",
+            expiresAt: Date.now() + 10 * 60_000,
+          }),
+          refresh: () => null,
+        },
+      })
+
+      const response = await claudeFetch(
+        "https://api.anthropic.com/v1/messages",
+        {
+          method: "POST",
+          body: JSON.stringify({ model: "claude-sonnet-4-6", messages: [] }),
+        },
+      )
+
+      assert.equal(response.status, status)
+      assert.equal(await response.text(), `recovered ${status}`)
+      assert.equal(calls, 2)
+      assert.deepEqual(slept, [])
+    })
+  }
+
+  it("propagates a Request signal to the initial upstream send", async () => {
+    const controller = new AbortController()
+    const request = new Request("https://api.anthropic.com/v1/messages", {
+      signal: controller.signal,
+    })
+    let seenSignal: AbortSignal | null | undefined
+    const upstream = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      seenSignal = init?.signal
+      return new Response("ok")
+    }) as typeof fetch
+    const claudeFetch = createClaudeFetch({
+      accessToken: "fixed-token",
+      upstream,
+    })
+
+    const response = await claudeFetch(request)
+
+    assert.equal(response.status, 200)
+    assert.equal(seenSignal, request.signal)
+  })
+
+  it("propagates a Request signal to the 401 recovery send", async () => {
+    const controller = new AbortController()
+    const request = new Request("https://api.anthropic.com/v1/messages", {
+      signal: controller.signal,
+    })
+    const seenSignals: Array<AbortSignal | null | undefined> = []
+    let calls = 0
+    const upstream = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      calls += 1
+      seenSignals.push(init?.signal)
+      return new Response(calls === 1 ? "unauthorized" : "ok", {
+        status: calls === 1 ? 401 : 200,
+      })
+    }) as typeof fetch
+    const claudeFetch = createClaudeFetch({
+      accessToken: "rejected-token",
+      upstream,
+      retries: 1,
+      authRecovery: {
+        reload: () => ({
+          accessToken: "rotated-token",
+          refreshToken: "rotated-refresh",
+          expiresAt: Date.now() + 10 * 60_000,
+        }),
+        refresh: () => null,
+      },
+    })
+
+    const response = await claudeFetch(request)
+
+    assert.equal(response.status, 200)
+    assert.equal(calls, 2)
+    assert.equal(seenSignals[0], request.signal)
+    assert.equal(seenSignals[1], request.signal)
+  })
+
+  it("uses init.signal instead of Request.signal when both are present", async () => {
+    const requestController = new AbortController()
+    const initController = new AbortController()
+    const request = new Request("https://api.anthropic.com/v1/messages", {
+      signal: requestController.signal,
+    })
+    let seenSignal: AbortSignal | null | undefined
+    const upstream = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      seenSignal = init?.signal
+      return new Response("ok")
+    }) as typeof fetch
+    const claudeFetch = createClaudeFetch({
+      accessToken: "fixed-token",
+      upstream,
+    })
+
+    const response = await claudeFetch(request, {
+      signal: initController.signal,
+    })
+
+    assert.equal(response.status, 200)
+    assert.equal(seenSignal, initController.signal)
+  })
+
   it("does not retry 401 recovery for a consumed one-shot request body", async () => {
     let calls = 0
     let recoveryCalls = 0
