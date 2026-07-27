@@ -433,6 +433,44 @@ describe("transforms", () => {
     )
   })
 
+  it("transformBody strips incompatible effort fields for sonnet", () => {
+    const input = JSON.stringify({
+      model: "claude-sonnet-4-6",
+      output_config: { effort: "high", max_tokens: 1024 },
+      thinking: { type: "enabled", effort: "high" },
+      messages: [{ role: "user", content: "test" }],
+    })
+
+    const output = transformBody(input)
+    const parsed = JSON.parse(output as string) as {
+      output_config?: { effort?: string; max_tokens?: number }
+      thinking?: { effort?: string; type?: string }
+    }
+
+    assert.equal(parsed.output_config?.effort, undefined)
+    assert.equal(parsed.output_config?.max_tokens, 1024)
+    assert.equal(parsed.thinking?.effort, undefined)
+    assert.equal(parsed.thinking?.type, "enabled")
+  })
+
+  it("transformBody preserves Opus 5 high adaptive thinking and effort", () => {
+    const input = JSON.stringify({
+      model: "claude-opus-5",
+      output_config: { effort: "high" },
+      thinking: { type: "adaptive", display: "omitted" },
+      messages: [{ role: "user", content: "test" }],
+    })
+
+    const output = transformBody(input)
+    const parsed = JSON.parse(output as string) as {
+      output_config?: { effort?: string }
+      thinking?: { type?: string; display?: string }
+    }
+
+    assert.equal(parsed.output_config?.effort, "high")
+    assert.deepEqual(parsed.thinking, { type: "adaptive", display: "omitted" })
+  })
+
   it("transformBody handles haiku without effort-related fields", () => {
     const input = JSON.stringify({
       model: "claude-haiku-4-5",
