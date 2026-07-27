@@ -532,3 +532,27 @@ assert.deepEqual(step?.reason, reason)
 assert.deepEqual(finish?.reason, reason)
 `)
 })
+
+test("pinned native provider can prepare an Anthropic request without sending HTTP", async () => {
+  await runBun(String.raw`
+import assert from "node:assert/strict"
+import { Effect } from "effect"
+import { LLM, LLMClient } from "@opencode-ai/ai"
+import { model } from "./src/provider.ts"
+
+const selected = model("claude-sonnet-4-6", {
+  apiKey: "oauth-access-token",
+  baseURL: "https://provider.test/v1",
+})
+const prepared = await Effect.runPromise(
+  LLMClient.prepare(
+    LLM.request({ model: selected, prompt: "hello from contract" }),
+  ),
+)
+
+assert.equal(prepared.route, "anthropic-messages")
+assert.equal(prepared.body.model, "claude-sonnet-4-6")
+assert.equal(prepared.body.stream, true)
+assert.equal(prepared.body.messages.at(-1).role, "user")
+`)
+})
