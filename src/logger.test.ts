@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, existsSync, rmSync } from "node:fs"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
 import { PassThrough } from "node:stream"
+import type { Writable } from "node:stream"
 import { initLogger, log, closeLogger, redact } from "./logger.ts"
 
 describe("logger", () => {
@@ -106,6 +107,33 @@ describe("logger", () => {
       log("test_event", {})
       closeLogger()
     })
+
+    it("swallows file sink init and append failures through injected file operations", () => {
+      process.env.CLAUDE_AUTH_DEBUG = join(tmpDir, "mock.log")
+      let truncateCalls = 0
+      let appendCalls = 0
+
+      assert.doesNotThrow(() =>
+        initLogger({
+          files: {
+            existsSync: () => true,
+            mkdirSync: () => undefined,
+            writeFileSync: () => {
+              truncateCalls += 1
+              throw new Error("truncate failed")
+            },
+            appendFileSync: () => {
+              appendCalls += 1
+              throw new Error("append failed")
+            },
+          },
+        }),
+      )
+      assert.doesNotThrow(() => log("file_sink_failure", { key: "value" }))
+
+      assert.equal(truncateCalls, 1)
+      assert.equal(appendCalls, 1)
+    })
   })
 
   describe("stream mode", () => {
@@ -140,6 +168,20 @@ describe("logger", () => {
       assert.ok(chunks.length > 0, "Stream should have received data")
     })
 
+    it("swallows stream write failures", () => {
+      const stream = {
+        write() {
+          throw new Error("stream write failed")
+        },
+      } as unknown as Writable
+
+      initLogger({ stream })
+
+      assert.doesNotThrow(() =>
+        log("stream_sink_failure", { accessToken: "secret-access" }),
+      )
+    })
+
     it("recursively redacts structured data while preserving context", () => {
       const stream = new PassThrough()
       const chunks: string[] = []
@@ -171,7 +213,7 @@ describe("logger", () => {
       assert.equal(parsed.modelId, "claude-sonnet-4-6")
       assert.equal(parsed.phase, "refresh")
       assert.equal(parsed.type, "oauth")
-      assert.equal(parsed.nested.authorization, "Bearer REDACTED")
+      assert.equal(parsed.nested.authorization, "REDACTED")
       assert.deepEqual(parsed.nested.items, [
         { access_token: "REDACTED", refresh_token: "REDACTED" },
         "retry with JWT_REDACTED",
@@ -208,15 +250,15 @@ describe("logger", () => {
       stream.on("data", (chunk) => chunks.push(chunk.toString()))
 
       initLogger({ stream })
-      log("class_payload", { credentials: new Credentials() })
+      log("class_payload", { payload: new Credentials() })
 
       const parsed = JSON.parse(chunks.join("").trim())
-      assert.deepEqual(parsed.credentials, {
+      assert.deepEqual(parsed.payload, {
         refreshToken: "REDACTED",
-        Authorization: "Bearer REDACTED",
+        Authorization: "REDACTED",
         nested: { access_token: "REDACTED" },
       })
-      assert.equal(Object.getPrototypeOf(parsed.credentials), Object.prototype)
+      assert.equal(Object.getPrototypeOf(parsed.payload), Object.prototype)
 
       const output = JSON.stringify(parsed)
       assert.ok(!output.includes("class-refresh-secret"))
@@ -268,7 +310,7 @@ describe("logger", () => {
 
       const parsed = JSON.parse(chunks.join("").trim())
       assert.equal(parsed.payload.refreshToken, "REDACTED")
-      assert.equal(parsed.payload.Authorization, "[Accessor]")
+      assert.equal(parsed.payload.Authorization, "REDACTED")
       assert.ok(!JSON.stringify(parsed).includes("getter-refresh-secret"))
     })
 
@@ -303,10 +345,7 @@ describe("logger", () => {
       assert.doesNotThrow(() => log("cyclic_class_payload", root))
 
       const parsed = JSON.parse(chunks.join("").trim())
-      assert.deepEqual(parsed.credentials, {
-        refreshToken: "REDACTED",
-        parent: "[Circular]",
-      })
+      assert.equal(parsed.credentials, "REDACTED")
       assert.ok(!JSON.stringify(parsed).includes("cyclic-class-refresh-secret"))
     })
 
@@ -350,11 +389,11 @@ describe("logger", () => {
 })
 
 describe("redact", () => {
-  it("prefix-redacts accessToken", () => {
+  it("fully redacts accessToken", () => {
     const result = redact({
       accessToken: "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.abc123",
     })
-    assert.equal(result.accessToken, "eyJhbGci...REDACTED")
+    assert.equal(result.accessToken, "REDACTED")
   })
 
   it("fully redacts refreshToken", () => {
@@ -365,6 +404,56 @@ describe("redact", () => {
   it("redacts x-api-key", () => {
     const result = redact({ "x-api-key": "sk-ant-api03-abc123def456" })
     assert.equal(result["x-api-key"], "REDACTED")
+  })
+
+  it("redacts suspicious property names case-insensitively before traversing", () => {
+    const result = redact({
+      token: "token-secret",
+      ACCESS_TOKEN: "access-secret",
+      refreshToken: "refresh-secret",
+      apiKey: "api-secret",
+      Authorization: { nested: "authorization-secret" },
+      Credentials: { accessToken: "nested-access-secret" },
+      password: "password-secret",
+      secret: "secret-value",
+      tokenCount: 12,
+      someToken: "plain-value",
+    })
+
+    assert.equal(result.token, "REDACTED")
+    assert.equal(result.ACCESS_TOKEN, "REDACTED")
+    assert.equal(result.refreshToken, "REDACTED")
+    assert.equal(result.apiKey, "REDACTED")
+    assert.equal(result.Authorization, "REDACTED")
+    assert.equal(result.Credentials, "REDACTED")
+    assert.equal(result.password, "REDACTED")
+    assert.equal(result.secret, "REDACTED")
+    assert.equal(result.tokenCount, 12)
+    assert.equal(result.someToken, "plain-value")
+    const output = JSON.stringify(result)
+    assert.ok(!output.includes("token-secret"))
+    assert.ok(!output.includes("access-secret"))
+    assert.ok(!output.includes("refresh-secret"))
+    assert.ok(!output.includes("api-secret"))
+    assert.ok(!output.includes("authorization-secret"))
+    assert.ok(!output.includes("nested-access-secret"))
+  })
+
+  it("sanitizes property names that contain embedded secret syntax", () => {
+    const result = redact({
+      "request access_token=access-secret refresh_token=refresh-secret": "safe",
+      "header Bearer bearer-secret": "safe",
+    })
+
+    assert.equal(
+      result["request access_token=REDACTED refresh_token=REDACTED"],
+      "safe",
+    )
+    assert.equal(result["header Bearer REDACTED"], "safe")
+    const output = JSON.stringify(result)
+    assert.ok(!output.includes("access-secret"))
+    assert.ok(!output.includes("refresh-secret"))
+    assert.ok(!output.includes("bearer-secret"))
   })
 
   it("catches JWT-pattern strings in arbitrary keys", () => {
@@ -437,7 +526,7 @@ describe("redact", () => {
     assert.deepEqual(result, {
       status: 401,
       nested: {
-        authorization: "Bearer REDACTED",
+        authorization: "REDACTED",
         parent: "[Circular]",
       },
       self: "[Circular]",
@@ -460,12 +549,12 @@ describe("redact", () => {
 
   it("handles short accessToken without crashing", () => {
     const result = redact({ accessToken: "short" })
-    assert.equal(result.accessToken, "short...REDACTED")
+    assert.equal(result.accessToken, "REDACTED")
   })
 
   it("handles empty string values", () => {
     const result = redact({ accessToken: "", refreshToken: "" })
-    assert.equal(result.accessToken, "...REDACTED")
+    assert.equal(result.accessToken, "REDACTED")
     assert.equal(result.refreshToken, "REDACTED")
   })
 

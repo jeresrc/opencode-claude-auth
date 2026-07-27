@@ -10,17 +10,48 @@ const CIRCULAR_MARKER = "[Circular]"
 const UNSERIALIZABLE_MARKER = "[Unserializable]"
 
 type LogMode = "disabled" | "file" | "stream"
+type LoggerFileOps = {
+  appendFileSync: typeof appendFileSync
+  existsSync: typeof existsSync
+  mkdirSync: typeof mkdirSync
+  writeFileSync: typeof writeFileSync
+}
 
 let mode: LogMode = "disabled"
 let logFilePath: string | null = null
 let logStream: Writable | null = null
+const defaultFileOps: LoggerFileOps = {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  writeFileSync,
+}
+let fileOps: LoggerFileOps = defaultFileOps
+
+const REDACTED = "REDACTED"
+const SENSITIVE_KEY_NAMES = new Set([
+  "token",
+  "accesstoken",
+  "refreshtoken",
+  "apikey",
+  "xapikey",
+  "authorization",
+  "credential",
+  "credentials",
+  "password",
+  "secret",
+])
 
 function getDefaultLogPath(): string {
   return join(homedir(), ".local", "share", "opencode", "claude-auth-debug.log")
 }
 
-export function initLogger(options?: { stream?: Writable }): void {
+export function initLogger(options?: {
+  stream?: Writable
+  files?: Partial<LoggerFileOps>
+}): void {
   closeLogger()
+  fileOps = { ...defaultFileOps, ...options?.files }
 
   if (options?.stream) {
     mode = "stream"
@@ -38,10 +69,18 @@ export function initLogger(options?: { stream?: Writable }): void {
   logFilePath = envVal === "1" ? getDefaultLogPath() : envVal
 
   const dir = dirname(logFilePath)
-  if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true })
+  try {
+    if (!fileOps.existsSync(dir)) {
+      fileOps.mkdirSync(dir, { recursive: true })
+    }
+  } catch {
+    // Debug logging is best-effort and must never affect auth/request flow.
   }
-  writeFileSync(logFilePath, "", "utf-8")
+  try {
+    fileOps.writeFileSync(logFilePath, "", "utf-8")
+  } catch {
+    // Debug logging is best-effort and must never affect auth/request flow.
+  }
 }
 
 export function log(event: string, data?: Record<string, unknown>): void {
@@ -55,10 +94,14 @@ export function log(event: string, data?: Record<string, unknown>): void {
   }
   const line = safeStringifyLogEntry(entry)
 
-  if (mode === "file" && logFilePath) {
-    appendFileSync(logFilePath, line, "utf-8")
-  } else if (mode === "stream" && logStream) {
-    logStream.write(line)
+  try {
+    if (mode === "file" && logFilePath) {
+      fileOps.appendFileSync(logFilePath, line, "utf-8")
+    } else if (mode === "stream" && logStream) {
+      logStream.write(line)
+    }
+  } catch {
+    // Debug logging is best-effort and must never affect auth/request flow.
   }
 }
 
@@ -66,32 +109,27 @@ export function closeLogger(): void {
   mode = "disabled"
   logFilePath = null
   logStream = null
+  fileOps = defaultFileOps
+}
+
+function normalizeKey(key: string): string {
+  return key.toLowerCase().replace(/[_-]/g, "")
+}
+
+function isSensitiveKey(key: string): boolean {
+  return SENSITIVE_KEY_NAMES.has(normalizeKey(key))
 }
 
 function redactString(key: string, value: string): string {
-  const normalizedKey = key.toLowerCase()
-
-  if (
-    normalizedKey === "refreshtoken" ||
-    normalizedKey === "refresh_token" ||
-    normalizedKey === "access_token" ||
-    normalizedKey === "x-api-key"
-  ) {
-    return "REDACTED"
-  }
-
-  if (normalizedKey === "accesstoken") {
-    const prefix = value.slice(0, 8)
-    return `${prefix}...REDACTED`
-  }
+  if (key && isSensitiveKey(key)) return REDACTED
 
   return value
-    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer REDACTED")
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, `Bearer ${REDACTED}`)
     .replace(JWT_PATTERN, "JWT_REDACTED")
-    .replace(/\baccess_token=([^&\s"'{};,]+)/gi, "access_token=REDACTED")
-    .replace(/\brefresh_token=([^&\s"'{};,]+)/gi, "refresh_token=REDACTED")
-    .replace(/("access_token"\s*:\s*")[^"]+(")/gi, "$1REDACTED$2")
-    .replace(/("refresh_token"\s*:\s*")[^"]+(")/gi, "$1REDACTED$2")
+    .replace(/\baccess_token=([^&\s"'{};,]+)/gi, `access_token=${REDACTED}`)
+    .replace(/\brefresh_token=([^&\s"'{};,]+)/gi, `refresh_token=${REDACTED}`)
+    .replace(/("access_token"\s*:\s*")[^"]+(")/gi, `$1${REDACTED}$2`)
+    .replace(/("refresh_token"\s*:\s*")[^"]+(")/gi, `$1${REDACTED}$2`)
     .replace(/sk-ant-[A-Za-z0-9_-]+/g, "sk-ant-REDACTED")
 }
 
@@ -214,11 +252,13 @@ function redactObject(
     for (const [childKey, descriptor] of Object.entries(descriptors)) {
       if (!descriptor.enumerable) continue
 
-      const childValue =
-        "value" in descriptor
+      const redactedKey = redactString("", childKey)
+      const childValue = isSensitiveKey(childKey)
+        ? REDACTED
+        : "value" in descriptor
           ? redactValue(childKey, descriptor.value, seen)
           : ACCESSOR_MARKER
-      defineDataProperty(result, childKey, childValue)
+      defineDataProperty(result, redactedKey, childValue)
     }
     return result
   } finally {
@@ -231,6 +271,7 @@ function redactValue(
   value: unknown,
   seen: WeakSet<object>,
 ): unknown {
+  if (key && isSensitiveKey(key)) return REDACTED
   if (typeof value === "string") return redactString(key, value)
   if (typeof value === "bigint") return value.toString()
   if (typeof value === "symbol") return "[Symbol]"

@@ -222,6 +222,153 @@ test("setup cleans up proactive refresh when a later registration fails", async 
   }
 })
 
+test("setup preserves the original registration error when rollback cleanup throws", async () => {
+  const setupError = new Error("catalog registration failed")
+  const cleanupError = new Error("cleanup failed")
+  const originalSetInterval = globalThis.setInterval
+  const originalClearInterval = globalThis.clearInterval
+
+  initAccounts([
+    {
+      label: "Claude",
+      source: "Claude Code-credentials",
+      credentials: {
+        accessToken: "fresh-token",
+        refreshToken: "fresh-refresh",
+        expiresAt: Date.now() + 2 * 60 * 60_000,
+      },
+    },
+  ])
+  const context = {
+    integration: {
+      transform: async () => {},
+      reload: async () => {},
+      connection: {
+        active: async () => undefined,
+        resolve: async () => undefined,
+      },
+      oauth: {
+        connect: async () => {
+          throw new Error("unexpected connect")
+        },
+        status: async () => {
+          throw new Error("unexpected status")
+        },
+      },
+    },
+    catalog: {
+      transform: async () => {
+        throw setupError
+      },
+    },
+    session: {
+      hook: async () => {
+        throw new Error("session hook should not run")
+      },
+      synthetic: async () => {},
+    },
+    event: {
+      subscribe: () => {
+        throw new Error("rate-limit listener should not start")
+      },
+    },
+  } as unknown as Parameters<typeof plugin.setup>[0]
+
+  globalThis.setInterval = (() =>
+    ({ unref: () => {} }) as never) as typeof setInterval
+  globalThis.clearInterval = (() => {
+    throw cleanupError
+  }) as typeof clearInterval
+
+  try {
+    await assert.rejects(() => plugin.setup(context), setupError)
+  } finally {
+    initAccounts([])
+    globalThis.setInterval = originalSetInterval
+    globalThis.clearInterval = originalClearInterval
+  }
+})
+
+test("normal teardown attempts every cleanup and reports cleanup failures", async () => {
+  const order: string[] = []
+  const originalSetInterval = globalThis.setInterval
+  const originalClearInterval = globalThis.clearInterval
+
+  initAccounts([
+    {
+      label: "Claude",
+      source: "Claude Code-credentials",
+      credentials: {
+        accessToken: "fresh-token",
+        refreshToken: "fresh-refresh",
+        expiresAt: Date.now() + 2 * 60 * 60_000,
+      },
+    },
+  ])
+  const context = {
+    integration: {
+      transform: async () => {},
+      reload: async () => {},
+      connection: {
+        active: async () => undefined,
+        resolve: async () => undefined,
+      },
+      oauth: {
+        connect: async () => {
+          throw new Error("unexpected connect")
+        },
+        status: async () => {
+          throw new Error("unexpected status")
+        },
+      },
+    },
+    catalog: {
+      transform: async () => {},
+    },
+    session: {
+      hook: async () => {},
+      synthetic: async () => {},
+    },
+    event: {
+      subscribe: () => ({
+        [Symbol.asyncIterator]: () => ({
+          next: async () =>
+            await new Promise<IteratorResult<unknown>>(() => {}),
+          return: async () => {
+            order.push("rate-limit:cleanup")
+            return { value: undefined, done: true }
+          },
+        }),
+      }),
+    },
+  } as unknown as Parameters<typeof plugin.setup>[0]
+
+  globalThis.setInterval = (() =>
+    ({ unref: () => {} }) as never) as typeof setInterval
+  globalThis.clearInterval = (() => {
+    order.push("proactive:cleanup")
+    throw new Error("proactive cleanup failed")
+  }) as typeof clearInterval
+
+  try {
+    const cleanup = await plugin.setup(context)
+
+    await assert.rejects(
+      () => cleanup?.(),
+      (error) =>
+        error instanceof AggregateError &&
+        error.errors.length === 1 &&
+        error.errors[0] instanceof Error &&
+        error.errors[0].message === "proactive cleanup failed",
+    )
+    assert.deepEqual(order, ["proactive:cleanup", "rate-limit:cleanup"])
+  } finally {
+    initAccounts([])
+    globalThis.setInterval = originalSetInterval
+    globalThis.clearInterval = originalClearInterval
+  }
+})
+
 test("local v2 docs use plugins file URL and do not document removed v1 auth paths", async () => {
   const docs = await Promise.all([
     readFile(new URL("../README.md", import.meta.url), "utf8"),

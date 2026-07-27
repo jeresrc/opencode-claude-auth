@@ -3,7 +3,7 @@ import { applyAnthropicCatalog } from "./catalog.ts"
 import { reconcileConnectedCredential } from "./credential-sync.ts"
 import { startProactiveRefresh } from "./credentials.ts"
 import { registerAnthropicIntegration } from "./integration.ts"
-import { initLogger } from "./logger.ts"
+import { initLogger, log } from "./logger.ts"
 import {
   startRateLimitNotices,
   type RateLimitNoticeContext,
@@ -42,11 +42,22 @@ const plugin: RuntimePlugin = {
     const cleanups: Cleanup[] = []
     let cleaned = false
 
-    const cleanup = async () => {
+    const cleanup = async (options: { suppressErrors?: boolean } = {}) => {
       if (cleaned) return
       cleaned = true
+      const failures: unknown[] = []
       for (const stop of cleanups) {
-        await stop()
+        try {
+          await stop()
+        } catch (error) {
+          failures.push(error)
+          log("cleanup_failed", {
+            error: error instanceof Error ? error.name : typeof error,
+          })
+        }
+      }
+      if (!options.suppressErrors && failures.length > 0) {
+        throw new AggregateError(failures, "Plugin cleanup failed")
       }
     }
 
@@ -61,11 +72,7 @@ const plugin: RuntimePlugin = {
 
       return cleanup
     } catch (error) {
-      try {
-        await cleanup()
-      } catch {
-        // Preserve the setup failure so callers see the registration error.
-      }
+      await cleanup({ suppressErrors: true })
       throw error
     }
   },
