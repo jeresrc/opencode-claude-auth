@@ -14,7 +14,7 @@ async function runBun(script: string): Promise<string> {
 
 const commonImports = String.raw`
 import assert from "node:assert/strict"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Stream } from "effect"
 import { LLM, LLMClient } from "@opencode-ai/ai"
 import { RequestExecutor } from "@opencode-ai/ai/route"
 import { model } from "./src/provider.ts"
@@ -35,6 +35,24 @@ data: {"type":"content_block_stop","index":0}
 
 event: message_delta
 data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":2}}
+
+event: message_stop
+data: {"type":"message_stop"}
+
+`
+
+const noStopReasonSse = String.raw`
+event: message_start
+data: {"type":"message_start","message":{"usage":{"input_tokens":1,"output_tokens":0}}}
+
+event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":"hello"}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" world"}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":0}
 
 event: message_stop
 data: {"type":"message_stop"}
@@ -301,54 +319,139 @@ assert.equal(JSON.stringify(prepared.body).includes("Claude Code-credentials"), 
 `)
 })
 
-test("terminal stream events without reason are normalized to unknown", async () => {
+test("native stream terminal events without Anthropic stop reason use structured unknown", async () => {
   await runBun(String.raw`
-import assert from "node:assert/strict"
-import { Effect, Stream } from "effect"
-import { withTerminalFinishReasonFallback } from "./src/provider.ts"
-
-const rawEvents = [
-  { type: "step-finish", index: 0 },
-  { type: "finish" },
-]
-const route = withTerminalFinishReasonFallback({
-  streamPrepared: () => Stream.fromIterable(rawEvents),
+${commonImports}
+const fakeFetch = async () =>
+  new Response(${JSON.stringify(noStopReasonSse)}, {
+    headers: { "content-type": "text/event-stream" },
+  })
+const selected = model("claude-sonnet-4-6", {
+  apiKey: "oauth-access-token",
+  baseURL: "https://provider.test/v1",
+  fetch: fakeFetch,
 })
 const events = await Effect.runPromise(
-  Stream.runCollect(route.streamPrepared(undefined, {}, {})),
+  Stream.runCollect(LLM.stream(LLM.request({ model: selected, prompt: "hello" }))).pipe(
+    Effect.provide(
+      LLMClient.layer.pipe(
+        Layer.provide(
+          Layer.succeed(RequestExecutor.Service, {
+            execute: () => Effect.die(new Error("global executor should not be used")),
+          }),
+        ),
+      ),
+    ),
+  ),
+)
+const terminal = events.filter(
+  (event) => event.type === "step-finish" || event.type === "finish",
 )
 
-assert.deepEqual(events, [
-  { type: "step-finish", index: 0, reason: "unknown" },
-  { type: "finish", reason: "unknown" },
+assert.deepEqual(terminal.map((event) => event.reason), [
+  { normalized: "unknown", raw: undefined },
+  { normalized: "unknown", raw: undefined },
 ])
 `)
 })
 
-test("terminal stream events preserve valid reasons", async () => {
+test("terminal fallback normalizes missing route terminal reasons to structured unknown", async () => {
   await runBun(String.raw`
 import assert from "node:assert/strict"
-import { Effect, Stream } from "effect"
+import { Effect, Layer, Schema, Stream } from "effect"
+import { LLM, LLMClient } from "@opencode-ai/ai"
+import { Endpoint, Protocol, RequestExecutor, Route } from "@opencode-ai/ai/route"
 import { withTerminalFinishReasonFallback } from "./src/provider.ts"
 
-const rawEvents = [
-  { type: "step-finish", index: 0, reason: "tool-calls" },
-  { type: "finish", reason: "stop" },
-  { type: "finish", reason: "length" },
-  { type: "finish", reason: "content-filter" },
-  { type: "finish", reason: "error" },
-  { type: "finish", reason: "unknown" },
+const frames = [
+  { type: "step-finish", index: 0 },
+  { type: "finish" },
+  // Keeps LLMClient's terminal guard satisfied while exercising malformed
+  // terminal events before the provider-local fallback maps them.
+  { type: "provider-error", message: "terminal sentinel" },
 ]
-const route = withTerminalFinishReasonFallback({
-  streamPrepared: () => Stream.fromIterable(rawEvents),
+const protocol = Protocol.make({
+  id: "fallback-test",
+  body: {
+    schema: Schema.Struct({}),
+    from: () => Effect.succeed({}),
+  },
+  stream: {
+    event: Schema.Struct({
+      type: Schema.String,
+      index: Schema.optional(Schema.Number),
+      message: Schema.optional(Schema.String),
+    }),
+    initial: () => undefined,
+    step: (state, event) => Effect.succeed([state, [event]]),
+  },
 })
+const route = withTerminalFinishReasonFallback(Route.make({
+  id: "fallback-test",
+  provider: "anthropic",
+  protocol,
+  endpoint: Endpoint.path("/messages", { baseURL: "https://provider.test/v1" }),
+  transport: {
+    id: "fallback-test",
+    prepare: () => Effect.succeed({}),
+    frames: () => Stream.fromIterable(frames),
+  },
+}))
+const selected = route.model({ id: "claude-sonnet-4-6" })
 const events = await Effect.runPromise(
-  Stream.runCollect(route.streamPrepared(undefined, {}, {})),
+  Stream.runCollect(LLM.stream(LLM.request({ model: selected, prompt: "hello" }))).pipe(
+    Effect.provide(
+      LLMClient.layer.pipe(
+        Layer.provide(
+          Layer.succeed(RequestExecutor.Service, {
+            execute: () => Effect.die(new Error("global executor should not be used")),
+          }),
+        ),
+      ),
+    ),
+  ),
+)
+const terminal = events.filter(
+  (event) => event.type === "step-finish" || event.type === "finish",
 )
 
-assert.deepEqual(
-  events.map((event) => event.reason),
-  ["tool-calls", "stop", "length", "content-filter", "error", "unknown"],
+assert.deepEqual(terminal, [
+  { type: "step-finish", index: 0, reason: { normalized: "unknown" } },
+  { type: "finish", reason: { normalized: "unknown" } },
+])
+`)
+})
+
+test("native stream terminal events preserve structured Anthropic finish reasons", async () => {
+  await runBun(String.raw`
+${commonImports}
+const fakeFetch = async () =>
+  new Response(${JSON.stringify(textSse)}, {
+    headers: { "content-type": "text/event-stream" },
+  })
+const selected = model("claude-sonnet-4-6", {
+  apiKey: "oauth-access-token",
+  baseURL: "https://provider.test/v1",
+  fetch: fakeFetch,
+})
+const events = await Effect.runPromise(
+  Stream.runCollect(LLM.stream(LLM.request({ model: selected, prompt: "hello" }))).pipe(
+    Effect.provide(
+      LLMClient.layer.pipe(
+        Layer.provide(
+          Layer.succeed(RequestExecutor.Service, {
+            execute: () => Effect.die(new Error("global executor should not be used")),
+          }),
+        ),
+      ),
+    ),
+  ),
 )
+const step = events.find((event) => event.type === "step-finish")
+const finish = events.find((event) => event.type === "finish")
+const reason = { normalized: "stop", raw: "end_turn" }
+
+assert.deepEqual(step?.reason, reason)
+assert.deepEqual(finish?.reason, reason)
 `)
 })

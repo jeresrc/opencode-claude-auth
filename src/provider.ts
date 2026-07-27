@@ -1,4 +1,5 @@
-import type { LLMEvent, Model } from "@opencode-ai/ai"
+import { Model as LLMModel } from "@opencode-ai/ai"
+import type { FinishReasonDetails, LLMEvent, Model } from "@opencode-ai/ai"
 import type {
   Definition as ProviderPackageDefinition,
   Settings as ProviderPackageSettings,
@@ -78,29 +79,35 @@ function withExecutor<Body, Prepared, Frame>(
   }
 }
 
-type TerminalEvent = Extract<LLMEvent, { type: "step-finish" | "finish" }>
+const UNKNOWN_FINISH_REASON = {
+  normalized: "unknown",
+} satisfies FinishReasonDetails
 
 export function normalizeTerminalFinishReason(event: LLMEvent): LLMEvent {
   if (event.type !== "step-finish" && event.type !== "finish") return event
 
-  const terminal = event as TerminalEvent & {
-    readonly reason?: TerminalEvent["reason"]
+  const reason = "reason" in event ? event.reason : undefined
+  if (typeof reason === "object" && reason !== null && "normalized" in reason) {
+    return event
   }
-  if (terminal.reason !== undefined) return event
 
-  return { ...event, reason: "unknown" } as unknown as LLMEvent
+  return { ...event, reason: UNKNOWN_FINISH_REASON }
 }
 
 export function withTerminalFinishReasonFallback<Body, Prepared>(
   route: RouteShape<Body, Prepared>,
 ): RouteShape<Body, Prepared> {
-  return {
+  const wrapped: RouteShape<Body, Prepared> = {
     ...route,
+    with: (patch) => withTerminalFinishReasonFallback(route.with(patch)),
+    model: (input) => LLMModel.update(route.model(input), { route: wrapped }),
     streamPrepared: (prepared, request, runtime) =>
       route
         .streamPrepared(prepared, request, runtime)
         .pipe(Stream.map(normalizeTerminalFinishReason)),
   }
+
+  return wrapped
 }
 
 export const model = ((modelID: string, settings: Settings): Model => {
