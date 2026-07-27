@@ -300,3 +300,55 @@ const prepared = await Effect.runPromise(
 assert.equal(JSON.stringify(prepared.body).includes("Claude Code-credentials"), false)
 `)
 })
+
+test("terminal stream events without reason are normalized to unknown", async () => {
+  await runBun(String.raw`
+import assert from "node:assert/strict"
+import { Effect, Stream } from "effect"
+import { withTerminalFinishReasonFallback } from "./src/provider.ts"
+
+const rawEvents = [
+  { type: "step-finish", index: 0 },
+  { type: "finish" },
+]
+const route = withTerminalFinishReasonFallback({
+  streamPrepared: () => Stream.fromIterable(rawEvents),
+})
+const events = await Effect.runPromise(
+  Stream.runCollect(route.streamPrepared(undefined, {}, {})),
+)
+
+assert.deepEqual(events, [
+  { type: "step-finish", index: 0, reason: "unknown" },
+  { type: "finish", reason: "unknown" },
+])
+`)
+})
+
+test("terminal stream events preserve valid reasons", async () => {
+  await runBun(String.raw`
+import assert from "node:assert/strict"
+import { Effect, Stream } from "effect"
+import { withTerminalFinishReasonFallback } from "./src/provider.ts"
+
+const rawEvents = [
+  { type: "step-finish", index: 0, reason: "tool-calls" },
+  { type: "finish", reason: "stop" },
+  { type: "finish", reason: "length" },
+  { type: "finish", reason: "content-filter" },
+  { type: "finish", reason: "error" },
+  { type: "finish", reason: "unknown" },
+]
+const route = withTerminalFinishReasonFallback({
+  streamPrepared: () => Stream.fromIterable(rawEvents),
+})
+const events = await Effect.runPromise(
+  Stream.runCollect(route.streamPrepared(undefined, {}, {})),
+)
+
+assert.deepEqual(
+  events.map((event) => event.reason),
+  ["tool-calls", "stop", "length", "content-filter", "error", "unknown"],
+)
+`)
+})

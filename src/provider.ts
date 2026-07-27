@@ -1,4 +1,4 @@
-import type { Model } from "@opencode-ai/ai"
+import type { LLMEvent, Model } from "@opencode-ai/ai"
 import type {
   Definition as ProviderPackageDefinition,
   Settings as ProviderPackageSettings,
@@ -9,6 +9,7 @@ import {
   Auth,
   HttpTransport,
   RequestExecutor,
+  type RouteShape,
   type TransportDef as Transport,
 } from "@opencode-ai/ai/route"
 import { Effect, Layer, Stream } from "effect"
@@ -77,6 +78,31 @@ function withExecutor<Body, Prepared, Frame>(
   }
 }
 
+type TerminalEvent = Extract<LLMEvent, { type: "step-finish" | "finish" }>
+
+export function normalizeTerminalFinishReason(event: LLMEvent): LLMEvent {
+  if (event.type !== "step-finish" && event.type !== "finish") return event
+
+  const terminal = event as TerminalEvent & {
+    readonly reason?: TerminalEvent["reason"]
+  }
+  if (terminal.reason !== undefined) return event
+
+  return { ...event, reason: "unknown" } as unknown as LLMEvent
+}
+
+export function withTerminalFinishReasonFallback<Body, Prepared>(
+  route: RouteShape<Body, Prepared>,
+): RouteShape<Body, Prepared> {
+  return {
+    ...route,
+    streamPrepared: (prepared, request, runtime) =>
+      route
+        .streamPrepared(prepared, request, runtime)
+        .pipe(Stream.map(normalizeTerminalFinishReason)),
+  }
+}
+
 export const model = ((modelID: string, settings: Settings): Model => {
   const accessToken = requireAccessToken(settings)
   const transport = withExecutor(
@@ -84,20 +110,24 @@ export const model = ((modelID: string, settings: Settings): Model => {
     executorLayer(accessToken, settings.fetch),
   )
 
-  const route = AnthropicMessages.route.with({
-    id: AnthropicMessages.route.id,
-    provider: "anthropic",
-    endpoint: {
-      baseURL: settings.baseURL ?? AnthropicMessages.DEFAULT_BASE_URL,
-    },
-    auth: Auth.bearer(accessToken),
-    transport,
-    headers:
-      settings.headers === undefined ? undefined : { ...settings.headers },
-    http:
-      settings.body === undefined ? undefined : { body: { ...settings.body } },
-    limits: settings.limits,
-  })
+  const route = withTerminalFinishReasonFallback(
+    AnthropicMessages.route.with({
+      id: AnthropicMessages.route.id,
+      provider: "anthropic",
+      endpoint: {
+        baseURL: settings.baseURL ?? AnthropicMessages.DEFAULT_BASE_URL,
+      },
+      auth: Auth.bearer(accessToken),
+      transport,
+      headers:
+        settings.headers === undefined ? undefined : { ...settings.headers },
+      http:
+        settings.body === undefined
+          ? undefined
+          : { body: { ...settings.body } },
+      limits: settings.limits,
+    }),
+  )
 
   return route.model({ id: modelID })
 }) satisfies ProviderPackageDefinition<Settings>["model"]
