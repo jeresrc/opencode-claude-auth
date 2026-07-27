@@ -479,7 +479,9 @@ describe("credential caching", () => {
         refresh: () => refreshed,
       })
 
-      assert.equal(account.credentials.accessToken, "new-token")
+      const current = credentialsModule.getCredentialsForSync()
+      assert.ok(current)
+      assert.equal(current.accessToken, "new-token")
       assert.equal(keychainModule.__getWriteCount(), 1)
       assert.deepEqual(intervals, [
         credentialsModule.PROACTIVE_REFRESH_INTERVAL_MS,
@@ -559,6 +561,68 @@ describe("credential caching", () => {
       assert.ok(current)
       assert.equal(current.accessToken, "new-token")
       assert.equal(keychainModule.__getReadCount(), 1)
+      assert.equal(keychainModule.__getWriteCount(), 1)
+      cleanup()
+    } finally {
+      Date.now = originalNow
+    }
+  })
+
+  it("startProactiveRefresh reloads the primary source before using a hot module cache", async () => {
+    const originalNow = Date.now
+    const now = 1_700_000_000_000
+    Date.now = () => now
+
+    try {
+      const { credentialsModule, keychainModule } =
+        await loadCredentialsWithCountingKeychain(now + 2 * 60 * 60_000)
+      keychainModule.__setCredentials({
+        accessToken: "old-fresh-token",
+        refreshToken: "old-refresh-token",
+        expiresAt: now + 2 * 60 * 60_000,
+      })
+      credentialsModule.initAccounts([
+        {
+          label: "Claude",
+          source: "keychain",
+          credentials: {
+            accessToken: "old-fresh-token",
+            refreshToken: "old-refresh-token",
+            expiresAt: now + 2 * 60 * 60_000,
+          },
+        },
+      ])
+
+      const cached = credentialsModule.getCachedCredentials()
+      assert.ok(cached)
+      assert.equal(cached.accessToken, "old-fresh-token")
+
+      keychainModule.__setCredentials({
+        accessToken: "new-near-expiry-token",
+        refreshToken: "new-refresh-token",
+        expiresAt: now + 30 * 60_000,
+      })
+      const refreshed = {
+        accessToken: "refreshed-token",
+        refreshToken: "refreshed-refresh-token",
+        expiresAt: now + 10 * 60 * 60_000,
+      }
+      const refreshTokens: string[] = []
+
+      const cleanup = credentialsModule.startProactiveRefresh({
+        setInterval: (() => "timer-id" as never) as typeof setInterval,
+        clearInterval: (() => undefined) as typeof clearInterval,
+        now: () => now,
+        refresh: (refreshToken: string) => {
+          refreshTokens.push(refreshToken)
+          return refreshed
+        },
+      })
+
+      const current = credentialsModule.getCredentialsForSync()
+      assert.ok(current)
+      assert.equal(current.accessToken, "refreshed-token")
+      assert.deepEqual(refreshTokens, ["new-refresh-token"])
       assert.equal(keychainModule.__getWriteCount(), 1)
       cleanup()
     } finally {

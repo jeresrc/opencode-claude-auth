@@ -39,17 +39,34 @@ const plugin: RuntimePlugin = {
   id: "opencode-claude-auth",
   async setup(context) {
     const runtime = context as unknown as RuntimePluginContext
-    initLogger()
-    await runtime.integration.transform(registerAnthropicIntegration)
-    await reconcileConnectedCredential(runtime.integration)
-    const stopProactiveRefresh = startProactiveRefresh()
-    await runtime.catalog.transform(applyAnthropicCatalog)
-    await runtime.session.hook("context", injectClaudeIdentity)
-    const stopRateLimitNotices = await startRateLimitNotices(runtime)
+    const cleanups: Cleanup[] = []
+    let cleaned = false
 
-    return async () => {
-      stopProactiveRefresh()
-      await stopRateLimitNotices()
+    const cleanup = async () => {
+      if (cleaned) return
+      cleaned = true
+      for (const stop of cleanups) {
+        await stop()
+      }
+    }
+
+    try {
+      initLogger()
+      await runtime.integration.transform(registerAnthropicIntegration)
+      await reconcileConnectedCredential(runtime.integration)
+      cleanups.push(startProactiveRefresh())
+      await runtime.catalog.transform(applyAnthropicCatalog)
+      await runtime.session.hook("context", injectClaudeIdentity)
+      cleanups.push(await startRateLimitNotices(runtime))
+
+      return cleanup
+    } catch (error) {
+      try {
+        await cleanup()
+      } catch {
+        // Preserve the setup failure so callers see the registration error.
+      }
+      throw error
     }
   },
 }

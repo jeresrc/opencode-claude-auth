@@ -348,7 +348,7 @@ export function startProactiveRefresh(
   const refresh = () => {
     let account: ClaudeAccount | null = null
     try {
-      account = allAccounts[0] ?? refreshAccountsList()[0] ?? null
+      account = refreshAccountsList()[0] ?? null
       if (!account) return
 
       const expiresIn = account.credentials.expiresAt - now()

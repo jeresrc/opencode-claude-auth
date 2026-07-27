@@ -23,6 +23,7 @@ test("setup registers v2 plugin domains then starts rate-limit listener", async 
   const order: string[] = []
   const registrations: unknown[] = []
   let subscriptionStopped = false
+  let subscriptionStopCount = 0
   const originalSetInterval = globalThis.setInterval
   const originalClearInterval = globalThis.clearInterval
   const proactiveTimer = { unref: () => order.push("proactive:unref") }
@@ -85,6 +86,7 @@ test("setup registers v2 plugin domains then starts rate-limit listener", async 
               await new Promise<IteratorResult<unknown>>(() => {}),
             return: async () => {
               subscriptionStopped = true
+              subscriptionStopCount++
               return { value: undefined, done: true }
             },
           }),
@@ -123,9 +125,96 @@ test("setup registers v2 plugin domains then starts rate-limit listener", async 
     assert.equal(typeof cleanup, "function")
 
     await cleanup?.()
+    await cleanup?.()
     assert.equal(clearedTimer, proactiveTimer)
     assert.equal(subscriptionStopped, true)
+    assert.equal(subscriptionStopCount, 1)
     assert.deepEqual(order.at(-1), "proactive:clearInterval")
+  } finally {
+    initAccounts([])
+    globalThis.setInterval = originalSetInterval
+    globalThis.clearInterval = originalClearInterval
+  }
+})
+
+test("setup cleans up proactive refresh when a later registration fails", async () => {
+  const error = new Error("catalog registration failed")
+  const registrations: unknown[] = []
+  const originalSetInterval = globalThis.setInterval
+  const originalClearInterval = globalThis.clearInterval
+  const proactiveTimer = { unref: () => {} }
+  const activeTimers = new Map<unknown, () => void>()
+  let clearedTimer: unknown
+  let callbackRuns = 0
+
+  initAccounts([
+    {
+      label: "Claude",
+      source: "Claude Code-credentials",
+      credentials: {
+        accessToken: "fresh-token",
+        refreshToken: "fresh-refresh",
+        expiresAt: Date.now() + 2 * 60 * 60_000,
+      },
+    },
+  ])
+  const context = {
+    integration: {
+      transform: async (handler: unknown) => {
+        registrations.push(handler)
+      },
+      reload: async () => {},
+      connection: {
+        active: async () => undefined,
+        resolve: async () => undefined,
+      },
+      oauth: {
+        connect: async () => {
+          throw new Error("unexpected connect")
+        },
+        status: async () => {
+          throw new Error("unexpected status")
+        },
+      },
+    },
+    catalog: {
+      transform: async () => {
+        throw error
+      },
+    },
+    session: {
+      hook: async () => {
+        throw new Error("session hook should not run")
+      },
+      synthetic: async () => {},
+    },
+    event: {
+      subscribe: () => {
+        throw new Error("rate-limit listener should not start")
+      },
+    },
+  } as unknown as Parameters<typeof plugin.setup>[0]
+
+  globalThis.setInterval = ((callback: () => void) => {
+    activeTimers.set(proactiveTimer, () => {
+      callbackRuns++
+      callback()
+    })
+    return proactiveTimer as never
+  }) as typeof setInterval
+  globalThis.clearInterval = ((timer: unknown) => {
+    clearedTimer = timer
+    activeTimers.delete(timer)
+  }) as typeof clearInterval
+
+  try {
+    await assert.rejects(() => plugin.setup(context), error)
+
+    assert.deepEqual(registrations, [registerAnthropicIntegration])
+    assert.equal(clearedTimer, proactiveTimer)
+    assert.equal(activeTimers.size, 0)
+    for (const callback of activeTimers.values()) callback()
+    assert.equal(callbackRuns, 0)
   } finally {
     initAccounts([])
     globalThis.setInterval = originalSetInterval
