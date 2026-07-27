@@ -76,6 +76,8 @@ const sessionId = randomUUID()
 
 const DEFAULT_MAX_RETRY_DELAY_MS = 30_000
 const MAX_ERROR_MESSAGE_LENGTH = 1000
+const JWT_PATTERN =
+  /(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+(?![A-Za-z0-9_-])/g
 
 function getMaxRetryDelayMs(): number {
   const env = process.env.OPENCODE_CLAUDE_AUTH_MAX_RETRY_MS
@@ -267,10 +269,7 @@ function sanitizeErrorMessage(message: string): string {
     .replace(/("access_token"\s*:\s*")[^"]+(")/gi, "$1REDACTED$2")
     .replace(/("refresh_token"\s*:\s*")[^"]+(")/gi, "$1REDACTED$2")
     .replace(/\brefresh_token=([^&\s"'{};,]+)/gi, "refresh_token=REDACTED")
-    .replace(
-      /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)?\b/g,
-      "JWT_REDACTED",
-    )
+    .replace(JWT_PATTERN, "JWT_REDACTED")
     .replace(/sk-ant-[A-Za-z0-9_-]+/g, "sk-ant-REDACTED")
 
   if (sanitized.length > MAX_ERROR_MESSAGE_LENGTH) {

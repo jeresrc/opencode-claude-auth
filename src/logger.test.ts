@@ -139,6 +139,62 @@ describe("logger", () => {
       )
       assert.ok(chunks.length > 0, "Stream should have received data")
     })
+
+    it("recursively redacts structured data while preserving context", () => {
+      const stream = new PassThrough()
+      const chunks: string[] = []
+      stream.on("data", (chunk) => chunks.push(chunk.toString()))
+      const jwt = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.payload.signature"
+      const error = new Error(
+        `failed with Bearer opaque-error-token access_token=access-secret refresh_token=refresh-secret sk-ant-api03-error ${jwt}`,
+      )
+
+      initLogger({ stream })
+      log("auth_recovery_failed", {
+        status: 401,
+        modelId: "claude-sonnet-4-6",
+        phase: "refresh",
+        type: "oauth",
+        nested: {
+          authorization: "Bearer opaque-nested-token",
+          items: [
+            { access_token: "access-nested", refresh_token: "refresh-nested" },
+            `retry with ${jwt}`,
+            "sk-ant-api03-nested",
+          ],
+        },
+        error,
+      })
+
+      const parsed = JSON.parse(chunks.join("").trim())
+      assert.equal(parsed.status, 401)
+      assert.equal(parsed.modelId, "claude-sonnet-4-6")
+      assert.equal(parsed.phase, "refresh")
+      assert.equal(parsed.type, "oauth")
+      assert.equal(parsed.nested.authorization, "Bearer REDACTED")
+      assert.deepEqual(parsed.nested.items, [
+        { access_token: "REDACTED", refresh_token: "REDACTED" },
+        "retry with JWT_REDACTED",
+        "sk-ant-REDACTED",
+      ])
+      assert.equal(parsed.error.name, "Error")
+      assert.equal(
+        parsed.error.message,
+        "failed with Bearer REDACTED access_token=REDACTED refresh_token=REDACTED sk-ant-REDACTED JWT_REDACTED",
+      )
+      assert.equal(typeof parsed.error.stack, "string")
+
+      const output = JSON.stringify(parsed)
+      assert.ok(!output.includes("opaque-error-token"))
+      assert.ok(!output.includes("opaque-nested-token"))
+      assert.ok(!output.includes("access-secret"))
+      assert.ok(!output.includes("refresh-secret"))
+      assert.ok(!output.includes("access-nested"))
+      assert.ok(!output.includes("refresh-nested"))
+      assert.ok(!output.includes("api03-error"))
+      assert.ok(!output.includes("api03-nested"))
+      assert.ok(!output.includes(jwt))
+    })
   })
 
   describe("timestamp", () => {
@@ -180,7 +236,7 @@ describe("redact", () => {
     const result = redact({
       someToken: "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.payload.signature",
     })
-    assert.equal(result.someToken, "eyJhbGci...REDACTED")
+    assert.equal(result.someToken, "JWT_REDACTED")
   })
 
   it("redacts token-like strings in error messages", () => {
@@ -191,8 +247,67 @@ describe("redact", () => {
 
     assert.equal(
       result.error,
-      "failed with Bearer JWT_REDACTED and refresh_token=REDACTED",
+      "failed with Bearer REDACTED and refresh_token=REDACTED",
     )
+  })
+
+  it("redacts generic opaque bearer tokens at logger level", () => {
+    const result = redact({
+      error: "failed with Bearer opaque-token_123-abc/def",
+    })
+
+    assert.equal(result.error, "failed with Bearer REDACTED")
+  })
+
+  it("preserves eyJ-prefixed strings that are not real JWTs", () => {
+    const value = "eyJthis-looks-token-like-but-has-no-dot-segments"
+    const result = redact({ value })
+
+    assert.equal(result.value, value)
+  })
+
+  it("preserves context around JWTs in arbitrary strings", () => {
+    const result = redact({
+      message:
+        "prefix eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.payload.signature suffix",
+    })
+
+    assert.equal(result.message, "prefix JWT_REDACTED suffix")
+  })
+
+  it("fully redacts JWTs whose segments end with dash or underscore", () => {
+    for (const jwt of [
+      "eyJhbGciOiJSUzI1NiJ9.payload.segment-",
+      "eyJhbGciOiJSUzI1NiJ9.payload.segment_",
+    ]) {
+      const result = redact({ message: `token=${jwt} done` })
+
+      assert.equal(result.message, "token=JWT_REDACTED done")
+      assert.ok(!String(result.message).includes(jwt))
+      assert.ok(!String(result.message).includes("segment"))
+    }
+  })
+
+  it("handles cyclic objects without leaking secrets", () => {
+    const data: Record<string, unknown> = {
+      status: 401,
+      nested: { authorization: "Bearer cyclic-secret" },
+    }
+    data.self = data
+    const nested = data.nested as Record<string, unknown>
+    nested.parent = data
+
+    const result = redact(data)
+
+    assert.deepEqual(result, {
+      status: 401,
+      nested: {
+        authorization: "Bearer REDACTED",
+        parent: "[Circular]",
+      },
+      self: "[Circular]",
+    })
+    assert.ok(!JSON.stringify(result).includes("cyclic-secret"))
   })
 
   it("preserves non-sensitive fields", () => {

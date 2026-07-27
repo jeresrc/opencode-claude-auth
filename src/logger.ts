@@ -3,7 +3,8 @@ import { dirname, join } from "node:path"
 import { homedir } from "node:os"
 import type { Writable } from "node:stream"
 
-const JWT_PATTERN = /^eyJ[A-Za-z0-9_-]{10,}/
+const JWT_PATTERN =
+  /(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+(?![A-Za-z0-9_-])/g
 
 type LogMode = "disabled" | "file" | "stream"
 
@@ -63,31 +64,26 @@ export function closeLogger(): void {
   logStream = null
 }
 
-function redactValue(key: string, value: unknown): unknown {
-  if (typeof value !== "string") return value
+function redactString(key: string, value: string): string {
+  const normalizedKey = key.toLowerCase()
 
-  if (key === "refreshToken" || key === "x-api-key") {
+  if (
+    normalizedKey === "refreshtoken" ||
+    normalizedKey === "refresh_token" ||
+    normalizedKey === "access_token" ||
+    normalizedKey === "x-api-key"
+  ) {
     return "REDACTED"
   }
 
-  if (key === "accessToken") {
+  if (normalizedKey === "accesstoken") {
     const prefix = value.slice(0, 8)
     return `${prefix}...REDACTED`
   }
 
-  if (JWT_PATTERN.test(value)) {
-    return `${value.slice(0, 8)}...REDACTED`
-  }
-
   return value
-    .replace(
-      /\bBearer\s+eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)?\b/g,
-      "Bearer JWT_REDACTED",
-    )
-    .replace(
-      /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)?\b/g,
-      "JWT_REDACTED",
-    )
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer REDACTED")
+    .replace(JWT_PATTERN, "JWT_REDACTED")
     .replace(/\baccess_token=([^&\s"'{};,]+)/gi, "access_token=REDACTED")
     .replace(/\brefresh_token=([^&\s"'{};,]+)/gi, "refresh_token=REDACTED")
     .replace(/("access_token"\s*:\s*")[^"]+(")/gi, "$1REDACTED$2")
@@ -95,10 +91,56 @@ function redactValue(key: string, value: unknown): unknown {
     .replace(/sk-ant-[A-Za-z0-9_-]+/g, "sk-ant-REDACTED")
 }
 
-export function redact(data: Record<string, unknown>): Record<string, unknown> {
-  const result: Record<string, unknown> = {}
-  for (const [key, value] of Object.entries(data)) {
-    result[key] = redactValue(key, value)
+function isPlainObject(value: object): value is Record<string, unknown> {
+  const proto = Object.getPrototypeOf(value)
+  return proto === Object.prototype || proto === null
+}
+
+function redactError(value: Error): Record<string, unknown> {
+  const result: Record<string, unknown> = {
+    name: redactString("name", value.name),
+    message: redactString("message", value.message),
+  }
+  if (typeof value.stack === "string") {
+    result.stack = redactString("stack", value.stack)
   }
   return result
+}
+
+function redactValue(
+  key: string,
+  value: unknown,
+  seen: WeakSet<object>,
+): unknown {
+  if (typeof value === "string") return redactString(key, value)
+  if (value === null || typeof value !== "object") return value
+  if (seen.has(value)) return "[Circular]"
+
+  if (value instanceof Error) {
+    seen.add(value)
+    const result = redactError(value)
+    seen.delete(value)
+    return result
+  }
+
+  if (Array.isArray(value)) {
+    seen.add(value)
+    const result = value.map((item) => redactValue("", item, seen))
+    seen.delete(value)
+    return result
+  }
+
+  if (!isPlainObject(value)) return value
+
+  seen.add(value)
+  const result: Record<string, unknown> = {}
+  for (const [childKey, childValue] of Object.entries(value)) {
+    result[childKey] = redactValue(childKey, childValue, seen)
+  }
+  seen.delete(value)
+  return result
+}
+
+export function redact(data: Record<string, unknown>): Record<string, unknown> {
+  return redactValue("", data, new WeakSet<object>()) as Record<string, unknown>
 }

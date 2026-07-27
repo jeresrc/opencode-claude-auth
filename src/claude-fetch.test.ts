@@ -1235,6 +1235,61 @@ describe("Claude OAuth fetch pipeline", () => {
     assert.ok(logOutput.includes("REDACTED"))
   })
 
+  it("does not leave JWT segment remnants in logged API errors", async () => {
+    const logged: string[] = []
+    initLogger({
+      stream: {
+        write(chunk: string) {
+          logged.push(chunk)
+          return true
+        },
+      } as never,
+    })
+    const originalWarn = console.warn
+    const warnings: string[] = []
+    const dashJwt = "eyJhbGciOiJSUzI1NiJ9.payload.segment-"
+    const underscoreJwt = "eyJhbGciOiJSUzI1NiJ9.payload.segment_"
+    const errorBody = JSON.stringify({
+      error: {
+        message: `dash ${dashJwt} done underscore ${underscoreJwt} done`,
+      },
+    })
+    const upstream = (async () =>
+      new Response(errorBody, { status: 500 })) as typeof fetch
+    const claudeFetch = createClaudeFetch({
+      accessToken: "fixed-token",
+      upstream,
+    })
+
+    try {
+      console.warn = (message: string) => {
+        warnings.push(message)
+      }
+      const response = await claudeFetch(
+        "https://api.anthropic.com/v1/messages",
+        {
+          method: "POST",
+          body: JSON.stringify({ model: "claude-sonnet-4-6", messages: [] }),
+        },
+      )
+      await response.text()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    } finally {
+      console.warn = originalWarn
+    }
+
+    const logOutput = logged.join("")
+    assert.equal(warnings.join("\n"), "")
+    assert.ok(logOutput.includes("dash JWT_REDACTED done"))
+    assert.ok(logOutput.includes("underscore JWT_REDACTED done"))
+    assert.ok(!logOutput.includes(dashJwt))
+    assert.ok(!logOutput.includes(underscoreJwt))
+    assert.ok(!logOutput.includes("segment-"))
+    assert.ok(!logOutput.includes("segment_"))
+    assert.ok(!logOutput.includes("JWT_REDACTED-"))
+    assert.ok(!logOutput.includes("JWT_REDACTED_"))
+  })
+
   it("transforms streamed response tool names back to OpenCode names", async () => {
     const upstream = (async () =>
       new Response(
