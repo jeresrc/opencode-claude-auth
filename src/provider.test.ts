@@ -260,7 +260,11 @@ assert.equal(calls.length, 1)
 assert.equal(JSON.parse(calls[0].bodyText).model, "claude-haiku-4-5")
 const betas = calls[0].headers["anthropic-beta"].split(",")
 assert.ok(
-  !betas.includes("interleaved-thinking-2025-05-14"),
+  betas.includes("interleaved-thinking-2025-05-14"),
+  calls[0].headers["anthropic-beta"],
+)
+assert.ok(
+  !betas.includes("effort-2025-11-24"),
   calls[0].headers["anthropic-beta"],
 )
 assert.ok(betas.includes("claude-code-20250219"))
