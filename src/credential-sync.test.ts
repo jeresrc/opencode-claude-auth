@@ -156,3 +156,106 @@ test("does not reconnect when the persisted credential is already current", asyn
   assert.equal(result, false)
   assert.equal(reloads, 0)
 })
+
+test("reconciles a legacy suffixed Keychain source through the sole primary account", async () => {
+  const primary = account("Claude Code-credentials")
+  const calls: Array<{ name: string; input?: unknown }> = []
+
+  const result = await reconcileConnectedCredential(
+    {
+      reload: async () => {
+        calls.push({ name: "reload" })
+      },
+      connection: {
+        active: async () => ({
+          type: "credential",
+          id: "credential-id",
+          label: "Anthropic account",
+        }),
+        resolve: async () => ({
+          type: "oauth",
+          methodID: "claude-code",
+          access: "legacy-access",
+          refresh: "legacy-refresh",
+          expires: 1,
+          metadata: { source: "Claude Code-credentials-deadbeef" },
+        }),
+      },
+      oauth: {
+        connect: async (input) => {
+          calls.push({ name: "connect", input })
+          return { data: { attemptID: "attempt-id", mode: "auto" } }
+        },
+        status: async (input) => {
+          calls.push({ name: "status", input })
+          return { data: { status: "complete" } }
+        },
+      },
+    },
+    {
+      readAccounts: () => [primary],
+      sleep: async () => {},
+      maxStatusChecks: 1,
+    },
+  )
+
+  assert.equal(result, true)
+  assert.deepEqual(calls, [
+    { name: "reload" },
+    {
+      name: "connect",
+      input: {
+        integrationID: "anthropic",
+        methodID: "claude-code",
+        inputs: { source: "Claude Code-credentials" },
+        label: "Anthropic account",
+      },
+    },
+    {
+      name: "status",
+      input: { integrationID: "anthropic", attemptID: "attempt-id" },
+    },
+  ])
+})
+
+test("does not reconcile arbitrary unknown sources through the primary account", async () => {
+  let reloads = 0
+  let connects = 0
+
+  const result = await reconcileConnectedCredential(
+    {
+      reload: async () => {
+        reloads += 1
+      },
+      connection: {
+        active: async () => ({
+          type: "credential",
+          id: "credential-id",
+          label: "Anthropic account",
+        }),
+        resolve: async () => ({
+          type: "oauth",
+          methodID: "claude-code",
+          access: "unknown-access",
+          refresh: "unknown-refresh",
+          expires: 1,
+          metadata: { source: "unrelated-source" },
+        }),
+      },
+      oauth: {
+        connect: async () => {
+          connects += 1
+          throw new Error("unexpected connect")
+        },
+        status: async () => {
+          throw new Error("unexpected status")
+        },
+      },
+    },
+    { readAccounts: () => [account("Claude Code-credentials")] },
+  )
+
+  assert.equal(result, false)
+  assert.equal(reloads, 0)
+  assert.equal(connects, 0)
+})

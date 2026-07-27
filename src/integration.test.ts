@@ -242,6 +242,73 @@ describe("Anthropic integration registration", () => {
     })
   })
 
+  it("refresh migrates a legacy suffixed Keychain source to the sole primary account", async () => {
+    const { draft, registration } = createDraft()
+    const primary = account("Claude Code-credentials", "Claude Pro")
+    let refreshAccount: ClaudeAccount | undefined
+
+    registerAnthropicIntegration(draft, {
+      readAccounts: () => [primary],
+      refreshIfNeeded: (target) => {
+        refreshAccount = target
+        return {
+          accessToken: "access-refreshed-primary",
+          refreshToken: "refresh-refreshed-primary",
+          expiresAt: 1_700_000_600_000,
+        }
+      },
+    })
+
+    const refreshed = await Effect.runPromise(
+      registration().refresh({
+        type: "oauth",
+        methodID: CLAUDE_CODE_METHOD_ID,
+        access: "access-legacy",
+        refresh: "refresh-legacy",
+        expires: 1,
+        metadata: { source: "Claude Code-credentials-deadbeef" },
+      }),
+    )
+
+    assert.equal(refreshAccount, primary)
+    assert.deepEqual(refreshed, {
+      type: "oauth",
+      methodID: CLAUDE_CODE_METHOD_ID,
+      access: "access-refreshed-primary",
+      refresh: "refresh-refreshed-primary",
+      expires: 1_700_000_600_000,
+      metadata: { source: "Claude Code-credentials" },
+    })
+  })
+
+  it("refresh does not migrate arbitrary unknown sources to the primary account", async () => {
+    const { draft, registration } = createDraft()
+    let refreshCalls = 0
+
+    registerAnthropicIntegration(draft, {
+      readAccounts: () => [account("Claude Code-credentials", "Claude Pro")],
+      refreshIfNeeded: () => {
+        refreshCalls += 1
+        return creds("unused")
+      },
+    })
+
+    await assert.rejects(
+      Effect.runPromise(
+        registration().refresh({
+          type: "oauth",
+          methodID: CLAUDE_CODE_METHOD_ID,
+          access: "access-unknown",
+          refresh: "refresh-unknown",
+          expires: 1,
+          metadata: { source: "unrelated-source" },
+        }),
+      ),
+      { message: /account not found/ },
+    )
+    assert.equal(refreshCalls, 0)
+  })
+
   it("fails refresh when metadata.source is absent", async () => {
     const { draft, registration } = createDraft()
     registerAnthropicIntegration(draft, {

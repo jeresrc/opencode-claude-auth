@@ -5,6 +5,7 @@ import type {
 import { Effect } from "effect"
 import { refreshIfNeeded, type RefreshOptions } from "./credentials.ts"
 import {
+  PRIMARY_SERVICE,
   readAllClaudeAccounts,
   type ClaudeAccount,
   type ClaudeCredentials,
@@ -67,6 +68,28 @@ function sourceFromMetadata(credential: {
   return source
 }
 
+function isLegacyPrimarySource(source: string): boolean {
+  const prefix = `${PRIMARY_SERVICE}-`
+  return source.startsWith(prefix) && source.length > prefix.length
+}
+
+function selectAccountForSource(
+  accounts: readonly ClaudeAccount[],
+  source: string,
+): ClaudeAccount | null {
+  const exact = accounts.find((target) => target.source === source)
+  if (exact) return exact
+  const [onlyAccount] = accounts
+  if (
+    isLegacyPrimarySource(source) &&
+    accounts.length === 1 &&
+    onlyAccount?.source === PRIMARY_SERVICE
+  ) {
+    return onlyAccount
+  }
+  return null
+}
+
 export function registerAnthropicIntegration(
   draft: IntegrationDraft,
   deps: Partial<IntegrationDeps> = {},
@@ -106,9 +129,10 @@ export function registerAnthropicIntegration(
       Effect.try({
         try: () => {
           const source = sourceFromMetadata(credential)
-          const account = resolvedDeps
-            .readAccounts()
-            .find((target) => target.source === source)
+          const account = selectAccountForSource(
+            resolvedDeps.readAccounts(),
+            source,
+          )
           if (!account) {
             throw new Error(
               `Claude Code account not found for source: ${source}`,
@@ -122,7 +146,7 @@ export function registerAnthropicIntegration(
               `Failed to refresh Claude Code credentials for source: ${source}`,
             )
           }
-          return toOAuthCredential(refreshed, source)
+          return toOAuthCredential(refreshed, account.source)
         },
         catch: (error) => error,
       }),

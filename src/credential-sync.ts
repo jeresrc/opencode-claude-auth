@@ -1,4 +1,8 @@
-import { readAllClaudeAccounts, type ClaudeAccount } from "./keychain.ts"
+import {
+  PRIMARY_SERVICE,
+  readAllClaudeAccounts,
+  type ClaudeAccount,
+} from "./keychain.ts"
 import { log } from "./logger.ts"
 
 type ConnectionInfo =
@@ -59,6 +63,28 @@ const defaultDependencies: Dependencies = {
   maxStatusChecks: 200,
 }
 
+function isLegacyPrimarySource(source: string): boolean {
+  const prefix = `${PRIMARY_SERVICE}-`
+  return source.startsWith(prefix) && source.length > prefix.length
+}
+
+function selectAccountForSource(
+  accounts: readonly ClaudeAccount[],
+  source: string,
+): ClaudeAccount | null {
+  const exact = accounts.find((candidate) => candidate.source === source)
+  if (exact) return exact
+  const [onlyAccount] = accounts
+  if (
+    isLegacyPrimarySource(source) &&
+    accounts.length === 1 &&
+    onlyAccount?.source === PRIMARY_SERVICE
+  ) {
+    return onlyAccount
+  }
+  return null
+}
+
 export async function reconcileConnectedCredential(
   integration: IntegrationClient,
   dependencies: Partial<Dependencies> = {},
@@ -80,20 +106,22 @@ export async function reconcileConnectedCredential(
     const source = credential.metadata?.source
     if (typeof source !== "string" || source.length === 0) return false
 
-    const account = resolvedDependencies
-      .readAccounts()
-      .find((candidate) => candidate.source === source)
+    const account = selectAccountForSource(
+      resolvedDependencies.readAccounts(),
+      source,
+    )
     if (!account) {
       log("active_account_missing", { source })
       return false
     }
 
     if (
+      source === account.source &&
       credential.access === account.credentials.accessToken &&
       credential.refresh === account.credentials.refreshToken &&
       credential.expires === account.credentials.expiresAt
     ) {
-      log("active_account_current", { source })
+      log("active_account_current", { source: account.source })
       return false
     }
 
@@ -103,7 +131,7 @@ export async function reconcileConnectedCredential(
     const attempt = await integration.oauth.connect({
       integrationID: "anthropic",
       methodID: "claude-code",
-      inputs: { source },
+      inputs: { source: account.source },
       label: active.label,
     })
     if (attempt.data.mode !== "auto") {
@@ -116,7 +144,7 @@ export async function reconcileConnectedCredential(
         attemptID: attempt.data.attemptID,
       })
       if (status.data.status === "complete") {
-        log("active_account_reconciled", { source })
+        log("active_account_reconciled", { source: account.source })
         return true
       }
       if (status.data.status === "failed") {
