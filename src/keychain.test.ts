@@ -6,57 +6,12 @@ import { join } from "node:path"
 import { tmpdir } from "node:os"
 import {
   buildAccountLabels,
+  parseCredentials,
   updateCredentialBlob,
   writeBackCredentials,
 } from "./keychain.ts"
 import { chmodSync, statSync } from "node:fs"
 import { mkdtemp } from "node:fs/promises"
-
-// Mirrors the parseCredentials logic from keychain.ts for unit testing
-function parseCredentials(raw: string): {
-  accessToken: string
-  refreshToken: string
-  expiresAt: number
-  subscriptionType?: string
-} | null {
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(raw)
-  } catch {
-    return null
-  }
-
-  const data = (parsed as { claudeAiOauth?: unknown }).claudeAiOauth ?? parsed
-  const creds = data as {
-    accessToken?: unknown
-    refreshToken?: unknown
-    expiresAt?: unknown
-    subscriptionType?: unknown
-    mcpOAuth?: unknown
-  }
-
-  if ((parsed as { mcpOAuth?: unknown }).mcpOAuth && !creds.accessToken) {
-    return null
-  }
-
-  if (
-    typeof creds.accessToken !== "string" ||
-    typeof creds.refreshToken !== "string" ||
-    typeof creds.expiresAt !== "number"
-  ) {
-    return null
-  }
-
-  return {
-    accessToken: creds.accessToken,
-    refreshToken: creds.refreshToken,
-    expiresAt: creds.expiresAt,
-    subscriptionType:
-      typeof creds.subscriptionType === "string"
-        ? creds.subscriptionType
-        : undefined,
-  }
-}
 
 // Mirrors listClaudeKeychainServices regex logic for unit testing
 function extractServicesFromDump(output: string): string[] {
@@ -138,6 +93,22 @@ describe("parseCredentials", () => {
     const result = parseCredentials(raw)
     assert.ok(result)
     assert.equal(result.subscriptionType, undefined)
+  })
+
+  it("truncates a fractional stored expiresAt", () => {
+    const raw = JSON.stringify({
+      claudeAiOauth: {
+        accessToken: "at-123",
+        refreshToken: "rt-456",
+        expiresAt: 1784891051785.9011,
+      },
+    })
+
+    const result = parseCredentials(raw)
+
+    assert.ok(result)
+    assert.equal(result.expiresAt, 1784891051785)
+    assert.equal(Number.isInteger(result.expiresAt), true)
   })
 
   it("returns null for MCP-only entries", () => {
