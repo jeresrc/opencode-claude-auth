@@ -1,6 +1,5 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
-import { Effect } from "effect"
 import {
   CLAUDE_CODE_METHOD_ID,
   registerAnthropicIntegration,
@@ -21,15 +20,12 @@ type CapturedRegistration = {
       options: Array<{ label: string; value: string; hint?: string }>
     }>
   }
-  authorize: (inputs: Record<string, string>) => Effect.Effect<
-    {
-      mode: "auto"
-      url: string
-      instructions: string
-      callback: Effect.Effect<unknown, unknown>
-    },
-    unknown
-  >
+  authorize: (inputs: Record<string, string>) => Promise<{
+    mode: "auto"
+    url: string
+    instructions: string
+    callback: Promise<unknown>
+  }>
   refresh: (credential: {
     type: "oauth"
     methodID: string
@@ -37,7 +33,7 @@ type CapturedRegistration = {
     refresh: string
     expires: number
     metadata?: Record<string, unknown>
-  }) => Effect.Effect<unknown, unknown>
+  }) => Promise<unknown>
 }
 
 type RefreshOptions = {
@@ -131,7 +127,7 @@ describe("Anthropic integration registration", () => {
     assert.equal(single.registration().method.prompts, undefined)
   })
 
-  it("returns Effects from authorize and callback that produce OAuth credentials", async () => {
+  it("returns real Promises from authorize and callback that produce OAuth credentials", async () => {
     const { draft, registration } = createDraft()
 
     registerAnthropicIntegration(draft, {
@@ -139,16 +135,18 @@ describe("Anthropic integration registration", () => {
       refreshIfNeeded: () => null,
     })
 
-    const authorizationEffect = registration().authorize({})
-    assert.equal(typeof authorizationEffect.pipe, "function")
+    const authorizationPromise = registration().authorize({})
+    assert.equal(typeof authorizationPromise.then, "function")
+    assert.equal("pipe" in authorizationPromise, false)
 
-    const authorization = await Effect.runPromise(authorizationEffect)
+    const authorization = await authorizationPromise
     assert.equal(authorization.mode, "auto")
     assert.equal(authorization.url, "")
     assert.match(authorization.instructions, /Claude Code credentials/)
-    assert.equal(typeof authorization.callback.pipe, "function")
+    assert.equal(typeof authorization.callback.then, "function")
+    assert.equal("pipe" in authorization.callback, false)
 
-    assert.deepEqual(await Effect.runPromise(authorization.callback), {
+    assert.deepEqual(await authorization.callback, {
       type: "oauth",
       methodID: CLAUDE_CODE_METHOD_ID,
       access: "access-file",
@@ -171,12 +169,12 @@ describe("Anthropic integration registration", () => {
       refreshIfNeeded: () => null,
     })
 
-    const authorization = await Effect.runPromise(
-      registration().authorize({ source: "Claude Code-credentials-deadbeef" }),
-    )
+    const authorization = await registration().authorize({
+      source: "Claude Code-credentials-deadbeef",
+    })
 
     assert.equal(authorization.mode, "auto")
-    assert.deepEqual(await Effect.runPromise(authorization.callback), {
+    assert.deepEqual(await authorization.callback, {
       type: "oauth",
       methodID: CLAUDE_CODE_METHOD_ID,
       access: "access-Claude Code-credentials",
@@ -214,16 +212,18 @@ describe("Anthropic integration registration", () => {
       },
     })
 
-    const refreshed = await Effect.runPromise(
-      registration().refresh({
-        type: "oauth",
-        methodID: CLAUDE_CODE_METHOD_ID,
-        access: "access-current",
-        refresh: "refresh-current",
-        expires: 1_700_001_000_000,
-        metadata: { source: "file" },
-      }),
-    )
+    const refreshPromise = registration().refresh({
+      type: "oauth",
+      methodID: CLAUDE_CODE_METHOD_ID,
+      access: "access-current",
+      refresh: "refresh-current",
+      expires: 1_700_001_000_000,
+      metadata: { source: "file" },
+    })
+    assert.equal(typeof refreshPromise.then, "function")
+    assert.equal("pipe" in refreshPromise, false)
+
+    const refreshed = await refreshPromise
 
     assert.ok(refreshAccount)
     assert.equal(refreshAccount, original)
@@ -259,16 +259,14 @@ describe("Anthropic integration registration", () => {
       },
     })
 
-    const refreshed = await Effect.runPromise(
-      registration().refresh({
-        type: "oauth",
-        methodID: CLAUDE_CODE_METHOD_ID,
-        access: "access-legacy",
-        refresh: "refresh-legacy",
-        expires: 1,
-        metadata: { source: "Claude Code-credentials-deadbeef" },
-      }),
-    )
+    const refreshed = await registration().refresh({
+      type: "oauth",
+      methodID: CLAUDE_CODE_METHOD_ID,
+      access: "access-legacy",
+      refresh: "refresh-legacy",
+      expires: 1,
+      metadata: { source: "Claude Code-credentials-deadbeef" },
+    })
 
     assert.equal(refreshAccount, primary)
     assert.deepEqual(refreshed, {
@@ -294,16 +292,14 @@ describe("Anthropic integration registration", () => {
     })
 
     await assert.rejects(
-      Effect.runPromise(
-        registration().refresh({
-          type: "oauth",
-          methodID: CLAUDE_CODE_METHOD_ID,
-          access: "access-unknown",
-          refresh: "refresh-unknown",
-          expires: 1,
-          metadata: { source: "unrelated-source" },
-        }),
-      ),
+      registration().refresh({
+        type: "oauth",
+        methodID: CLAUDE_CODE_METHOD_ID,
+        access: "access-unknown",
+        refresh: "refresh-unknown",
+        expires: 1,
+        metadata: { source: "unrelated-source" },
+      }),
       { message: /account not found/ },
     )
     assert.equal(refreshCalls, 0)
@@ -317,15 +313,13 @@ describe("Anthropic integration registration", () => {
     })
 
     await assert.rejects(
-      Effect.runPromise(
-        registration().refresh({
-          type: "oauth",
-          methodID: CLAUDE_CODE_METHOD_ID,
-          access: "old-access",
-          refresh: "old-refresh",
-          expires: 1,
-        }),
-      ),
+      registration().refresh({
+        type: "oauth",
+        methodID: CLAUDE_CODE_METHOD_ID,
+        access: "old-access",
+        refresh: "old-refresh",
+        expires: 1,
+      }),
       { message: /missing metadata.source/ },
     )
   })

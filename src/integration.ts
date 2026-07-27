@@ -1,8 +1,4 @@
-import type {
-  IntegrationDraft,
-  IntegrationMethodRegistration,
-} from "@opencode-ai/plugin/v2/effect/integration"
-import { Effect } from "effect"
+import type { IntegrationDraft } from "@opencode-ai/plugin/v2/promise"
 import { refreshIfNeeded, type RefreshOptions } from "./credentials.ts"
 import {
   PRIMARY_SERVICE,
@@ -21,6 +17,32 @@ export type ClaudeOAuthCredential = {
   refresh: string
   expires: number
   metadata: { source: string }
+}
+
+type OAuthCredentialInput = {
+  type: "oauth"
+  methodID: string
+  access: string
+  refresh: string
+  expires: number
+  metadata?: Record<string, unknown>
+}
+
+type PromiseOAuthMethodRegistration = {
+  integrationID: typeof ANTHROPIC_INTEGRATION_ID
+  method: {
+    id: typeof CLAUDE_CODE_METHOD_ID
+    type: "oauth"
+    label: string
+  }
+  authorize: (inputs: Record<string, string>) => Promise<{
+    mode: "auto"
+    url: string
+    instructions: string
+    callback: Promise<ClaudeOAuthCredential>
+  }>
+  refresh: (credential: OAuthCredentialInput) => Promise<ClaudeOAuthCredential>
+  label: (credential: OAuthCredentialInput) => string | undefined
 }
 
 type IntegrationDeps = {
@@ -58,9 +80,7 @@ function selectPrimaryAccount(
   return primary
 }
 
-function sourceFromMetadata(credential: {
-  metadata?: { [key: string]: unknown }
-}): string {
+function sourceFromMetadata(credential: OAuthCredentialInput): string {
   const source = credential.metadata?.source
   if (typeof source !== "string" || source.length === 0) {
     throw new Error("Claude OAuth credential missing metadata.source")
@@ -108,53 +128,43 @@ export function registerAnthropicIntegration(
       type: "oauth" as const,
       label: "Claude Code credentials",
     },
-    authorize: (_inputs) =>
-      Effect.try({
-        try: () => {
-          const account = selectPrimaryAccount(resolvedDeps.readAccounts())
+    authorize: async (_inputs) => {
+      const account = selectPrimaryAccount(resolvedDeps.readAccounts())
 
-          return {
-            mode: "auto" as const,
-            url: "",
-            instructions:
-              "Use the selected Claude Code credentials already installed on this machine.",
-            callback: Effect.sync(() =>
-              toOAuthCredential(account.credentials, account.source),
-            ),
-          }
-        },
-        catch: (error) => error,
-      }),
-    refresh: (credential) =>
-      Effect.try({
-        try: () => {
-          const source = sourceFromMetadata(credential)
-          const account = selectAccountForSource(
-            resolvedDeps.readAccounts(),
-            source,
-          )
-          if (!account) {
-            throw new Error(
-              `Claude Code account not found for source: ${source}`,
-            )
-          }
-          const refreshed = resolvedDeps.refreshIfNeeded(account, {
-            reloadSource: true,
-          })
-          if (!refreshed) {
-            throw new Error(
-              `Failed to refresh Claude Code credentials for source: ${source}`,
-            )
-          }
-          return toOAuthCredential(refreshed, account.source)
-        },
-        catch: (error) => error,
-      }),
+      return {
+        mode: "auto" as const,
+        url: "",
+        instructions:
+          "Use the selected Claude Code credentials already installed on this machine.",
+        callback: Promise.resolve(
+          toOAuthCredential(account.credentials, account.source),
+        ),
+      }
+    },
+    refresh: async (credential) => {
+      const source = sourceFromMetadata(credential)
+      const account = selectAccountForSource(
+        resolvedDeps.readAccounts(),
+        source,
+      )
+      if (!account) {
+        throw new Error(`Claude Code account not found for source: ${source}`)
+      }
+      const refreshed = resolvedDeps.refreshIfNeeded(account, {
+        reloadSource: true,
+      })
+      if (!refreshed) {
+        throw new Error(
+          `Failed to refresh Claude Code credentials for source: ${source}`,
+        )
+      }
+      return toOAuthCredential(refreshed, account.source)
+    },
     label: (credential) => {
       const source = credential.metadata?.source
       return typeof source === "string" ? source : undefined
     },
-  } satisfies IntegrationMethodRegistration
+  } satisfies PromiseOAuthMethodRegistration
 
-  draft.method.update(registration)
+  draft.method.update(registration as never)
 }

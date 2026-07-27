@@ -137,6 +137,147 @@ test("setup registers v2 plugin domains then starts rate-limit listener", async 
   }
 })
 
+test("setup reconciliation consumes the registered OAuth method with Promise semantics", async () => {
+  const calls: string[] = []
+  const expiresAt = Date.now() + 2 * 60 * 60_000
+  let registration:
+    | {
+        authorize: (inputs: Record<string, string>) => Promise<{
+          mode: "auto"
+          callback: Promise<unknown>
+        }>
+      }
+    | undefined
+
+  initAccounts([
+    {
+      label: "Claude",
+      source: "Claude Code-credentials",
+      credentials: {
+        accessToken: "fresh-token",
+        refreshToken: "fresh-refresh",
+        expiresAt,
+      },
+    },
+  ])
+
+  const context = {
+    integration: {
+      transform: async (handler: typeof registerAnthropicIntegration) => {
+        calls.push("transform")
+        handler(
+          {
+            list: () => [{ id: "anthropic", name: "Old Anthropic" }],
+            get: () => ({ id: "anthropic", name: "Old Anthropic" }),
+            update: () => {},
+            remove: () => {},
+            method: {
+              list: () => [],
+              update: (input: typeof registration) => {
+                registration = input
+                calls.push("method:update")
+              },
+              remove: () => {},
+            },
+          },
+          {
+            readAccounts: () => [
+              {
+                label: "Claude",
+                source: "Claude Code-credentials",
+                credentials: {
+                  accessToken: "fresh-token",
+                  refreshToken: "fresh-refresh",
+                  expiresAt,
+                },
+              },
+            ],
+            refreshIfNeeded: () => null,
+          },
+        )
+      },
+      reload: async () => {
+        calls.push("reload")
+      },
+      connection: {
+        active: async () => ({
+          type: "credential",
+          id: "credential-id",
+          label: "Anthropic account",
+        }),
+        resolve: async () => ({
+          type: "oauth",
+          methodID: "claude-code",
+          access: "legacy-access",
+          refresh: "legacy-refresh",
+          expires: 1,
+          metadata: { source: "Claude Code-credentials-deadbeef" },
+        }),
+      },
+      oauth: {
+        connect: async (input: { inputs: Record<string, string> }) => {
+          calls.push("connect")
+          assert.ok(registration, "expected registered OAuth method")
+          const authorization = await registration
+            .authorize(input.inputs)
+            .then((value) => value)
+          const credential = await authorization.callback.then((value) => value)
+          assert.deepEqual(credential, {
+            type: "oauth",
+            methodID: "claude-code",
+            access: "fresh-token",
+            refresh: "fresh-refresh",
+            expires: expiresAt,
+            metadata: { source: "Claude Code-credentials" },
+          })
+          calls.push("connect:authorized")
+          return { data: { attemptID: "attempt-id", mode: authorization.mode } }
+        },
+        status: async () => {
+          calls.push("status")
+          return { data: { status: "complete" } }
+        },
+      },
+    },
+    catalog: {
+      transform: async () => {
+        calls.push("catalog")
+      },
+    },
+    session: {
+      hook: async () => {
+        calls.push("session")
+      },
+      synthetic: async () => {},
+    },
+    event: {
+      subscribe: () => ({
+        [Symbol.asyncIterator]: () => ({
+          next: async () =>
+            await new Promise<IteratorResult<unknown>>(() => {}),
+          return: async () => ({ value: undefined, done: true }),
+        }),
+      }),
+    },
+  } as unknown as Parameters<typeof plugin.setup>[0]
+
+  try {
+    const cleanup = await plugin.setup(context)
+    await cleanup?.()
+  } finally {
+    initAccounts([])
+  }
+
+  assert.deepEqual(calls.slice(0, 6), [
+    "transform",
+    "method:update",
+    "reload",
+    "connect",
+    "connect:authorized",
+    "status",
+  ])
+})
+
 test("setup cleans up proactive refresh when a later registration fails", async () => {
   const error = new Error("catalog registration failed")
   const registrations: unknown[] = []
