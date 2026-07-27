@@ -50,3 +50,19 @@
 - Full: `pnpm test`: 257 passed, 0 failed.
 - Typecheck: `pnpm run typecheck`: exited 0.
 - Lint: `pnpm run lint`: oxlint found 0 warnings and 0 errors; oxfmt check passed.
+
+## Review fixes 2
+
+- Added RED coverage for class/custom object log payloads to ensure own data properties are serialized into plain redacted output, including `refreshToken`, `Authorization`, and nested OAuth token fields.
+- Added RED coverage proving custom `toJSON()` methods are not executed, throwing accessors are represented as `[Accessor]`, BigInt values serialize without logger throws, class-instance cycles are `[Circular]`, and proxy reflection failures become `[Unserializable]` without leaking thrown error text.
+- Updated `src/logger.ts` so redaction copies enumerable own data descriptors instead of using `Object.entries`, never invokes payload getters or `toJSON`, converts BigInt/Symbol/Function values to stable safe representations, preserves Date/URL string value through sanitizer without using `toJSON`, and keeps log serialization best-effort.
+- Kept the HTTP 401 structured sanitized message policy unchanged; no `src/claude-fetch.ts` source changes were needed for this review fix.
+
+### Review fixes 2 verification
+
+- RED: `pnpm exec node --test --experimental-strip-types src/logger.test.ts` failed on the new class, `toJSON`, getter, BigInt, class-cycle, and proxy reflection assertions before the logger implementation change.
+- Focused logger: `pnpm exec node --test --experimental-strip-types src/logger.test.ts`: 31 passed, 0 failed.
+- Focused claude-fetch: `pnpm exec node --test --experimental-strip-types src/claude-fetch.test.ts`: 37 passed, 0 failed.
+- Full: `pnpm test`: 263 passed, 0 failed.
+- Typecheck: `pnpm run typecheck`: exited 0.
+- Lint: `pnpm run lint`: oxlint found 0 warnings and 0 errors; oxfmt check passed.

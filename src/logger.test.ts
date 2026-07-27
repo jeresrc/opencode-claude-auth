@@ -195,6 +195,141 @@ describe("logger", () => {
       assert.ok(!output.includes("api03-nested"))
       assert.ok(!output.includes(jwt))
     })
+
+    it("redacts own data properties on class instances without leaking secrets", () => {
+      class Credentials {
+        refreshToken = "class-refresh-secret"
+        Authorization = "Bearer class-authorization-secret"
+        nested = { access_token: "class-access-secret" }
+      }
+
+      const stream = new PassThrough()
+      const chunks: string[] = []
+      stream.on("data", (chunk) => chunks.push(chunk.toString()))
+
+      initLogger({ stream })
+      log("class_payload", { credentials: new Credentials() })
+
+      const parsed = JSON.parse(chunks.join("").trim())
+      assert.deepEqual(parsed.credentials, {
+        refreshToken: "REDACTED",
+        Authorization: "Bearer REDACTED",
+        nested: { access_token: "REDACTED" },
+      })
+      assert.equal(Object.getPrototypeOf(parsed.credentials), Object.prototype)
+
+      const output = JSON.stringify(parsed)
+      assert.ok(!output.includes("class-refresh-secret"))
+      assert.ok(!output.includes("class-authorization-secret"))
+      assert.ok(!output.includes("class-access-secret"))
+    })
+
+    it("does not execute custom toJSON methods while redacting", () => {
+      let toJsonCalls = 0
+      class Payload {
+        value = "safe"
+        toJSON() {
+          toJsonCalls += 1
+          return { refreshToken: "tojson-refresh-secret" }
+        }
+      }
+
+      const stream = new PassThrough()
+      const chunks: string[] = []
+      stream.on("data", (chunk) => chunks.push(chunk.toString()))
+
+      initLogger({ stream })
+      log("custom_tojson", { payload: new Payload() })
+
+      const parsed = JSON.parse(chunks.join("").trim())
+      assert.equal(toJsonCalls, 0)
+      assert.equal(parsed.payload.value, "safe")
+      assert.equal(parsed.payload.toJSON, undefined)
+      assert.ok(!JSON.stringify(parsed).includes("tojson-refresh-secret"))
+    })
+
+    it("does not execute throwing getters and still writes the log entry", () => {
+      const payload: Record<string, unknown> = {
+        refreshToken: "getter-refresh-secret",
+      }
+      Object.defineProperty(payload, "Authorization", {
+        enumerable: true,
+        get() {
+          throw new Error("getter should not run")
+        },
+      })
+
+      const stream = new PassThrough()
+      const chunks: string[] = []
+      stream.on("data", (chunk) => chunks.push(chunk.toString()))
+
+      initLogger({ stream })
+      assert.doesNotThrow(() => log("throwing_getter", { payload }))
+
+      const parsed = JSON.parse(chunks.join("").trim())
+      assert.equal(parsed.payload.refreshToken, "REDACTED")
+      assert.equal(parsed.payload.Authorization, "[Accessor]")
+      assert.ok(!JSON.stringify(parsed).includes("getter-refresh-secret"))
+    })
+
+    it("serializes BigInt values without throwing", () => {
+      const stream = new PassThrough()
+      const chunks: string[] = []
+      stream.on("data", (chunk) => chunks.push(chunk.toString()))
+
+      initLogger({ stream })
+      assert.doesNotThrow(() => log("bigint_payload", { id: 123n }))
+
+      const parsed = JSON.parse(chunks.join("").trim())
+      assert.equal(parsed.id, "123")
+    })
+
+    it("handles cycles that include class instances without leaking secrets", () => {
+      class Credentials {
+        refreshToken = "cyclic-class-refresh-secret"
+        parent?: Record<string, unknown>
+      }
+
+      const root: Record<string, unknown> = { status: 401 }
+      const credentials = new Credentials()
+      credentials.parent = root
+      root.credentials = credentials
+
+      const stream = new PassThrough()
+      const chunks: string[] = []
+      stream.on("data", (chunk) => chunks.push(chunk.toString()))
+
+      initLogger({ stream })
+      assert.doesNotThrow(() => log("cyclic_class_payload", root))
+
+      const parsed = JSON.parse(chunks.join("").trim())
+      assert.deepEqual(parsed.credentials, {
+        refreshToken: "REDACTED",
+        parent: "[Circular]",
+      })
+      assert.ok(!JSON.stringify(parsed).includes("cyclic-class-refresh-secret"))
+    })
+
+    it("marks proxy reflection failures as unserializable without throwing", () => {
+      const proxy = new Proxy(
+        {},
+        {
+          ownKeys() {
+            throw new Error("reflection failed with proxy-refresh-secret")
+          },
+        },
+      )
+      const stream = new PassThrough()
+      const chunks: string[] = []
+      stream.on("data", (chunk) => chunks.push(chunk.toString()))
+
+      initLogger({ stream })
+      assert.doesNotThrow(() => log("proxy_payload", { proxy }))
+
+      const parsed = JSON.parse(chunks.join("").trim())
+      assert.equal(parsed.proxy, "[Unserializable]")
+      assert.ok(!JSON.stringify(parsed).includes("proxy-refresh-secret"))
+    })
   })
 
   describe("timestamp", () => {
