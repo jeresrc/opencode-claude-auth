@@ -1,6 +1,10 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
-import { getModelBetas, isLongContextError } from "./betas.ts"
+import {
+  getModelBetas,
+  getModelExcludedBetas,
+  isLongContextError,
+} from "./betas.ts"
 import { config, getModelOverride } from "./model-config.ts"
 
 describe("betas", () => {
@@ -63,8 +67,9 @@ describe("betas", () => {
     assert.equal(config.ccVersion, "2.1.217")
     assert.ok(!config.baseBetas.includes("effort-2025-11-24"))
     assert.equal(
-      config.baseBetas.filter((beta) => beta === "interleaved-thinking-2025-05-14")
-        .length,
+      config.baseBetas.filter(
+        (beta) => beta === "interleaved-thinking-2025-05-14",
+      ).length,
       1,
     )
   })
@@ -81,6 +86,13 @@ describe("betas", () => {
   it("Opus 5 high includes the compatible effort beta", () => {
     const betas = getModelBetas("claude-opus-5")
     assert.ok(betas.includes("effort-2025-11-24"))
+  })
+
+  it("getModelExcludedBetas exposes model override exclusions", () => {
+    assert.ok(
+      getModelExcludedBetas("claude-sonnet-4-6").has("effort-2025-11-24"),
+    )
+    assert.equal(getModelExcludedBetas("claude-opus-5").size, 0)
   })
 
   it("getModelOverride sets disableEffort for haiku models", () => {

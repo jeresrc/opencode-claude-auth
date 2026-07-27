@@ -55,6 +55,10 @@ export function isLongContextError(responseBody: string): boolean {
   )
 }
 
+export function getModelExcludedBetas(modelId: string): Set<string> {
+  return new Set(getModelOverride(modelId)?.exclude ?? [])
+}
+
 export function getNextBetaToExclude(modelId: string): string | null {
   const excluded = getExcludedBetas(modelId)
   for (const beta of LONG_CONTEXT_BETAS) {
@@ -77,10 +81,11 @@ export function getModelBetas(
   // Apply per-model overrides (e.g. haiku excludes claude-code-20250219)
   const override = getModelOverride(modelId)
   if (override) {
-    const { exclude, add } = override
-    if (exclude) {
+    const { add } = override
+    const modelExcludedBetas = getModelExcludedBetas(modelId)
+    if (modelExcludedBetas.size > 0) {
       // Remove every occurrence — regenerated configs can contain duplicates
-      betas = betas.filter((beta) => !exclude.includes(beta))
+      betas = betas.filter((beta) => !modelExcludedBetas.has(beta))
     }
     if (add) {
       for (const beta of add) {

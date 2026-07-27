@@ -3,6 +3,7 @@ import {
   addExcludedBeta,
   getExcludedBetas,
   getModelBetas,
+  getModelExcludedBetas,
   getNextBetaToExclude,
   isLongContextError,
   LONG_CONTEXT_BETAS,
@@ -181,6 +182,7 @@ export function buildRequestHeaders(
   mergeHeaders(headers, init.headers)
 
   const modelBetas = getModelBetas(modelId, excludedBetas)
+  const modelExcludedBetas = getModelExcludedBetas(modelId)
   const incomingBeta = headers.get("anthropic-beta") ?? ""
   const mergedBetas = [
     ...new Set([
@@ -190,7 +192,7 @@ export function buildRequestHeaders(
         .map((item) => item.trim())
         .filter(Boolean),
     ]),
-  ].filter((beta) => !excludedBetas?.has(beta))
+  ].filter((beta) => !excludedBetas?.has(beta) && !modelExcludedBetas.has(beta))
 
   headers.set("authorization", `Bearer ${accessToken}`)
   headers.set("anthropic-version", "2023-06-01")

@@ -111,6 +111,40 @@ describe("Claude OAuth fetch pipeline", () => {
     assert.ok(!betas.includes("interleaved-thinking-2025-05-14"))
   })
 
+  it("filters model-specific beta exclusions after merging incoming betas", () => {
+    const headers = buildRequestHeaders(
+      "https://api.anthropic.com/v1/messages",
+      {
+        headers: {
+          "anthropic-beta": "effort-2025-11-24, custom-allowed-beta",
+        },
+      },
+      "access-token",
+      "claude-sonnet-4-6",
+    )
+
+    const betas = (headers.get("anthropic-beta") ?? "").split(",")
+    assert.ok(!betas.includes("effort-2025-11-24"))
+    assert.ok(betas.includes("custom-allowed-beta"))
+  })
+
+  it("keeps effort beta for opus 5 after merging incoming betas", () => {
+    const headers = buildRequestHeaders(
+      "https://api.anthropic.com/v1/messages",
+      {
+        headers: {
+          "anthropic-beta": "effort-2025-11-24, custom-allowed-beta",
+        },
+      },
+      "access-token",
+      "claude-opus-5",
+    )
+
+    const betas = (headers.get("anthropic-beta") ?? "").split(",")
+    assert.ok(betas.includes("effort-2025-11-24"))
+    assert.ok(betas.includes("custom-allowed-beta"))
+  })
+
   it("transforms request bodies through billing, system, and tool-name rewrites", async () => {
     let sentInit: RequestInit | undefined
     const upstream = (async (_input: RequestInfo | URL, init?: RequestInit) => {
@@ -164,6 +198,7 @@ describe("Claude OAuth fetch pipeline", () => {
   })
 
   it("detects model ids from string request bodies before building beta headers", async () => {
+    process.env.ANTHROPIC_BETA_FLAGS = "effort-2025-11-24,claude-code-20250219"
     let betaHeader = ""
     const upstream = (async (_input: RequestInfo | URL, init?: RequestInit) => {
       betaHeader = new Headers(init?.headers).get("anthropic-beta") ?? ""
@@ -179,11 +214,12 @@ describe("Claude OAuth fetch pipeline", () => {
       body: JSON.stringify({ model: "claude-haiku-4-5", messages: [] }),
     })
 
-    assert.ok(!betaHeader.includes("interleaved-thinking-2025-05-14"))
+    assert.ok(!betaHeader.includes("effort-2025-11-24"))
     assert.ok(betaHeader.includes("claude-code-20250219"))
   })
 
   it("detects model ids from Uint8Array request bodies before building beta headers", async () => {
+    process.env.ANTHROPIC_BETA_FLAGS = "effort-2025-11-24,claude-code-20250219"
     let betaHeader = ""
     const upstream = (async (_input: RequestInfo | URL, init?: RequestInit) => {
       betaHeader = new Headers(init?.headers).get("anthropic-beta") ?? ""
@@ -201,7 +237,7 @@ describe("Claude OAuth fetch pipeline", () => {
       ),
     })
 
-    assert.ok(!betaHeader.includes("interleaved-thinking-2025-05-14"))
+    assert.ok(!betaHeader.includes("effort-2025-11-24"))
     assert.ok(betaHeader.includes("claude-code-20250219"))
   })
 
