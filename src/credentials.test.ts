@@ -792,6 +792,82 @@ describe("credential caching", () => {
       Date.now = originalNow
     }
   })
+
+  it("does not retry 401 recovery or update cache when forced refresh writeback throws", async () => {
+    const originalNow = Date.now
+    const now = 1_700_000_000_000
+    Date.now = () => now
+
+    try {
+      const { credentialsModule, keychainModule } =
+        await loadCredentialsWithCountingKeychain(now + 10 * 60_000, {
+          writeBackThrows: true,
+        })
+      const oldCreds = {
+        accessToken: "old-token",
+        refreshToken: "old-refresh",
+        expiresAt: now + 10 * 60_000,
+      }
+      const newCreds = {
+        accessToken: "oauth-refreshed-token",
+        refreshToken: "oauth-refreshed-refresh",
+        expiresAt: now + 10 * 60 * 60_000,
+      }
+      keychainModule.__setCredentials(oldCreds)
+      const account = {
+        label: "Claude",
+        source: "Claude Code-credentials",
+        credentials: { ...oldCreds },
+      }
+      credentialsModule.initAccounts([account])
+      assert.equal(
+        credentialsModule.getCachedCredentials()?.accessToken,
+        "old-token",
+      )
+
+      let calls = 0
+      const upstream = (async () => {
+        calls += 1
+        return new Response(calls === 1 ? "unauthorized" : "should not retry", {
+          status: calls === 1 ? 401 : 200,
+        })
+      }) as typeof fetch
+      const claudeFetch = createClaudeFetch({
+        accessToken: "old-token",
+        upstream,
+        retries: 3,
+        sleep: async () => {},
+        authRecovery: {
+          reload: () => credentialsModule.reloadPrimaryCredentials(),
+          refresh: () =>
+            credentialsModule.forceRefreshPrimaryCredentials((refreshToken) => {
+              assert.equal(refreshToken, "old-refresh")
+              return newCreds
+            }),
+        },
+      })
+
+      const response = await claudeFetch(
+        "https://api.anthropic.com/v1/messages",
+        {
+          method: "POST",
+          body: JSON.stringify({ model: "claude-sonnet-4-6", messages: [] }),
+        },
+      )
+
+      assert.equal(response.status, 401)
+      assert.equal(await response.text(), "unauthorized")
+      assert.equal(calls, 1)
+      assert.equal(keychainModule.__getWriteCount(), 1)
+      assert.equal(account.credentials.accessToken, "old-token")
+      assert.equal(
+        credentialsModule.getCachedCredentials()?.accessToken,
+        "old-token",
+      )
+    } finally {
+      Date.now = originalNow
+    }
+  })
 })
 
 describe("syncAuthJson file permissions", () => {

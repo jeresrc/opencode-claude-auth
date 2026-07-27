@@ -363,6 +363,7 @@ export function createClaudeFetch(options: ClaudeFetchOptions): FetchFn {
       )
     }
 
+    let authRecoverySent = false
     let response = await send(activeAccessToken)
 
     log("fetch_response", { status: response.status, modelId, retryAttempt: 0 })
@@ -392,6 +393,7 @@ export function createClaudeFetch(options: ClaudeFetchOptions): FetchFn {
 
       if (retryCreds && retryCreds.accessToken !== activeAccessToken) {
         activeAccessToken = retryCreds.accessToken
+        authRecoverySent = true
         response = await send(activeAccessToken, 1)
         log("fetch_response", {
           status: response.status,
@@ -403,6 +405,7 @@ export function createClaudeFetch(options: ClaudeFetchOptions): FetchFn {
 
     for (let attempt = 0; attempt < LONG_CONTEXT_BETAS.length; attempt++) {
       if (!isReplayable) break
+      if (authRecoverySent) break
       if (response.status !== 400 && response.status !== 429) break
 
       const responseBody = await response.clone().text()

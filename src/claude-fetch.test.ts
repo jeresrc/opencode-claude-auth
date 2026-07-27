@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { afterEach, describe, it } from "node:test"
-import { resetExcludedBetas } from "./betas.ts"
+import { isLongContextError, resetExcludedBetas } from "./betas.ts"
 import {
   buildRequestHeaders,
   buildRequestUrl,
@@ -554,6 +554,57 @@ describe("Claude OAuth fetch pipeline", () => {
       assert.equal(await response.text(), `recovered ${status}`)
       assert.equal(calls, 2)
       assert.deepEqual(slept, [])
+    })
+  }
+
+  for (const status of [429, 400] as const) {
+    it(`does not beta retry the recovered auth attempt when it returns ${status} long-context error`, async () => {
+      process.env.ANTHROPIC_BETA_FLAGS =
+        "context-1m-2025-08-07,interleaved-thinking-2025-05-14"
+      const longContextBody = JSON.stringify({
+        error: {
+          message: "Extra usage is required for long context requests",
+        },
+      })
+      assert.ok(isLongContextError(longContextBody))
+
+      let calls = 0
+      const upstream = (async () => {
+        calls += 1
+        if (calls === 1) {
+          return new Response("unauthorized", { status: 401 })
+        }
+        if (calls === 2) {
+          return new Response(longContextBody, { status })
+        }
+        return new Response("unexpected beta retry", { status: 200 })
+      }) as typeof fetch
+      const claudeFetch = createClaudeFetch({
+        accessToken: "rejected-token",
+        upstream,
+        retries: 4,
+        sleep: async () => {},
+        authRecovery: {
+          reload: () => ({
+            accessToken: "rotated-token",
+            refreshToken: "rotated-refresh",
+            expiresAt: Date.now() + 10 * 60_000,
+          }),
+          refresh: () => null,
+        },
+      })
+
+      const response = await claudeFetch(
+        "https://api.anthropic.com/v1/messages",
+        {
+          method: "POST",
+          body: JSON.stringify({ model: "claude-sonnet-4-6", messages: [] }),
+        },
+      )
+
+      assert.equal(response.status, status)
+      assert.equal(await response.text(), longContextBody)
+      assert.equal(calls, 2)
     })
   }
 
