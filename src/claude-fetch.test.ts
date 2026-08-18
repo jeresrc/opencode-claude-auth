@@ -1356,3 +1356,193 @@ describe("Claude OAuth fetch pipeline", () => {
     assert.equal(forwardedHeaders?.get("authorization"), "Bearer fixed-token")
   })
 })
+
+describe("stream overload retry", () => {
+  const OVERLOADED_EVENT =
+    'event: error\ndata: {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}\n\n'
+  const MESSAGE_START =
+    'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_1"}}\n\n'
+  const MESSAGE_STOP = 'event: message_stop\ndata: {"type":"message_stop"}\n\n'
+
+  function sseResponse(body: string): Response {
+    return new Response(body, {
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+    })
+  }
+
+  const messagesBody = JSON.stringify({
+    model: "claude-opus-5",
+    messages: [{ role: "user", content: "hello" }],
+  })
+
+  it("retries when the first SSE event is an overloaded error", async () => {
+    let calls = 0
+    const sleeps: number[] = []
+    const upstream = (async () => {
+      calls += 1
+      return calls === 1
+        ? sseResponse(OVERLOADED_EVENT)
+        : sseResponse(MESSAGE_START + MESSAGE_STOP)
+    }) as typeof fetch
+    const claudeFetch = createClaudeFetch({
+      accessToken: "fixed-token",
+      upstream,
+      sleep: (delayMs) => {
+        sleeps.push(delayMs)
+      },
+    })
+
+    const response = await claudeFetch(
+      "https://api.anthropic.com/v1/messages",
+      {
+        method: "POST",
+        body: messagesBody,
+      },
+    )
+
+    assert.equal(calls, 2)
+    assert.deepEqual(sleeps, [2000])
+    assert.equal(await response.text(), MESSAGE_START + MESSAGE_STOP)
+  })
+
+  it("passes successful streams through with a single request", async () => {
+    let calls = 0
+    const upstream = (async () => {
+      calls += 1
+      return sseResponse(MESSAGE_START + MESSAGE_STOP)
+    }) as typeof fetch
+    const claudeFetch = createClaudeFetch({
+      accessToken: "fixed-token",
+      upstream,
+      sleep: () => {},
+    })
+
+    const response = await claudeFetch(
+      "https://api.anthropic.com/v1/messages",
+      {
+        method: "POST",
+        body: messagesBody,
+      },
+    )
+
+    assert.equal(calls, 1)
+    assert.equal(await response.text(), MESSAGE_START + MESSAGE_STOP)
+  })
+
+  it("returns the overloaded stream after exhausting retries", async () => {
+    let calls = 0
+    const sleeps: number[] = []
+    const upstream = (async () => {
+      calls += 1
+      return sseResponse(OVERLOADED_EVENT)
+    }) as typeof fetch
+    const claudeFetch = createClaudeFetch({
+      accessToken: "fixed-token",
+      upstream,
+      retries: 2,
+      sleep: (delayMs) => {
+        sleeps.push(delayMs)
+      },
+    })
+
+    const response = await claudeFetch(
+      "https://api.anthropic.com/v1/messages",
+      {
+        method: "POST",
+        body: messagesBody,
+      },
+    )
+
+    assert.equal(calls, 2)
+    assert.deepEqual(sleeps, [2000])
+    assert.equal(await response.text(), OVERLOADED_EVENT)
+  })
+
+  it("does not retry when the overloaded error arrives after content", async () => {
+    let calls = 0
+    const upstream = (async () => {
+      calls += 1
+      return sseResponse(MESSAGE_START + OVERLOADED_EVENT)
+    }) as typeof fetch
+    const claudeFetch = createClaudeFetch({
+      accessToken: "fixed-token",
+      upstream,
+      sleep: () => {},
+    })
+
+    const response = await claudeFetch(
+      "https://api.anthropic.com/v1/messages",
+      {
+        method: "POST",
+        body: messagesBody,
+      },
+    )
+
+    assert.equal(calls, 1)
+    assert.equal(await response.text(), MESSAGE_START + OVERLOADED_EVENT)
+  })
+
+  it("does not retry stream overloads for non-replayable request bodies", async () => {
+    let calls = 0
+    const upstream = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      calls += 1
+      if (init?.body instanceof ReadableStream) {
+        await new Response(init.body).text()
+      }
+      return sseResponse(OVERLOADED_EVENT)
+    }) as typeof fetch
+    const claudeFetch = createClaudeFetch({
+      accessToken: "fixed-token",
+      upstream,
+      sleep: () => {},
+    })
+
+    const response = await claudeFetch(
+      "https://api.anthropic.com/v1/messages",
+      {
+        method: "POST",
+        // @ts-expect-error duplex is required for streaming bodies at runtime
+        duplex: "half",
+        body: new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode(messagesBody))
+            controller.close()
+          },
+        }),
+      },
+    )
+
+    assert.equal(calls, 1)
+    assert.equal(await response.text(), OVERLOADED_EVENT)
+  })
+
+  it("does not retry when the backoff delay exceeds the configured cap", async () => {
+    process.env.OPENCODE_CLAUDE_AUTH_MAX_RETRY_MS = "1000"
+    let calls = 0
+    const sleeps: number[] = []
+    const upstream = (async () => {
+      calls += 1
+      return sseResponse(OVERLOADED_EVENT)
+    }) as typeof fetch
+    const claudeFetch = createClaudeFetch({
+      accessToken: "fixed-token",
+      upstream,
+      sleep: (delayMs) => {
+        sleeps.push(delayMs)
+      },
+    })
+
+    const response = await claudeFetch(
+      "https://api.anthropic.com/v1/messages",
+      {
+        method: "POST",
+        body: messagesBody,
+      },
+    )
+
+    assert.equal(calls, 1)
+    assert.deepEqual(sleeps, [])
+    assert.equal(await response.text(), OVERLOADED_EVENT)
+  })
+})

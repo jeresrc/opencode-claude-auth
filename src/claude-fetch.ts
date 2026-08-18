@@ -16,6 +16,7 @@ import {
   transformBody,
   transformResponseStream,
 } from "./transforms.ts"
+import { peekStreamOverload } from "./stream-retry.ts"
 
 type FetchFn = typeof fetch
 type SleepFn = (delayMs: number) => Promise<void> | void
@@ -431,6 +432,33 @@ export function createClaudeFetch(options: ClaudeFetchOptions): FetchFn {
         upstream,
         sleep,
       )
+    }
+
+    // Anthropic can accept the request (HTTP 200) and then deliver
+    // `overloaded_error` as the first SSE event instead of an HTTP 529.
+    // Replay those with the same backoff policy as HTTP rate limits; errors
+    // that arrive after content are passed through untouched.
+    if (isReplayable) {
+      for (let attempt = 1; attempt <= effectiveRetries; attempt++) {
+        const peeked = await peekStreamOverload(response)
+        response = peeked.response
+        if (!peeked.overloaded) break
+        if (attempt >= effectiveRetries) {
+          log("fetch_stream_overloaded_exhausted", { modelId, attempt })
+          break
+        }
+
+        const delayMs = attempt * 2000
+        if (delayMs > getMaxRetryDelayMs()) {
+          log("fetch_stream_overloaded_quota", { modelId, attempt, delayMs })
+          break
+        }
+
+        log("fetch_stream_overloaded", { modelId, attempt, delayMs })
+        await response.body?.cancel().catch(() => {})
+        await sleep(delayMs)
+        response = await send(activeAccessToken)
+      }
     }
 
     warnOnErrorResponse(response, modelId)
