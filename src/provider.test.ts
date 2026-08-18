@@ -316,10 +316,10 @@ const selected = model("claude-sonnet-4-6", {
 })
 assert.equal(selected.route.defaults.providerOptions, undefined)
 assert.equal(selected.route.defaults.http?.body?.source, undefined)
-const prepared = await Effect.runPromise(
-  LLMClient.prepare(LLM.request({ model: selected, prompt: "hello" })),
+const body = await Effect.runPromise(
+  selected.route.body.from(LLM.request({ model: selected, prompt: "hello" })),
 )
-assert.equal(JSON.stringify(prepared.body).includes("Claude Code-credentials"), false)
+assert.equal(JSON.stringify(body).includes("Claude Code-credentials"), false)
 `)
 })
 
@@ -395,7 +395,7 @@ const route = Route.make({
   transport: {
     id: "fallback-test",
     prepare: () => Effect.succeed({}),
-    frames: () => Stream.fromIterable(frames),
+    execute: () => Effect.succeed({ frames: Stream.fromIterable(frames) }),
   },
 })
 const selected = route.model({ id: "claude-sonnet-4-6" })
@@ -458,7 +458,7 @@ function routeFor(frames) {
     transport: {
       id: "fallback-test",
       prepare: () => Effect.succeed({}),
-      frames: () => Stream.fromIterable(frames),
+      execute: () => Effect.succeed({ frames: Stream.fromIterable(frames) }),
     },
   }).model({ id: "claude-sonnet-4-6" })
 }
@@ -479,15 +479,15 @@ const run = (frames) => Effect.runPromise(
 
 await assert.rejects(
   () => run([{ type: "finish", reason: null }]),
-  /terminal finish event/,
+  /provider response ended unexpectedly/,
 )
 await assert.rejects(
   () => run([{ type: "finish", reason: "stop" }]),
-  /terminal finish event/,
+  /provider response ended unexpectedly/,
 )
 await assert.rejects(
   () => run([{ type: "finish", reason: { raw: "stop" } }]),
-  /terminal finish event/,
+  /provider response ended unexpectedly/,
 )
 
 const reason = { normalized: "stop", raw: "end_turn" }
@@ -548,15 +548,15 @@ const selected = model("claude-sonnet-4-6", {
   apiKey: "oauth-access-token",
   baseURL: "https://provider.test/v1",
 })
-const prepared = await Effect.runPromise(
-  LLMClient.prepare(
+const body = await Effect.runPromise(
+  selected.route.body.from(
     LLM.request({ model: selected, prompt: "hello from contract" }),
   ),
 )
 
-assert.equal(prepared.route, "anthropic-messages")
-assert.equal(prepared.body.model, "claude-sonnet-4-6")
-assert.equal(prepared.body.stream, true)
-assert.equal(prepared.body.messages.at(-1).role, "user")
+assert.equal(selected.route.id, "anthropic-messages")
+assert.equal(body.model, "claude-sonnet-4-6")
+assert.equal(body.stream, true)
+assert.equal(body.messages.at(-1).role, "user")
 `)
 })

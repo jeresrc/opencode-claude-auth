@@ -50,7 +50,7 @@ assert.deepEqual(selected.route.endpoint, {
 assert.equal(typeof selected.route.transport, "object")
 assert.equal(selected.route.transport.id, "http-json")
 assert.equal(typeof selected.route.transport.prepare, "function")
-assert.equal(typeof selected.route.transport.frames, "function")
+assert.equal(typeof selected.route.transport.execute, "function")
 assert.equal(typeof selected.route.model, "function")
 assert.equal(typeof selected.route.streamPrepared, "function")
 `)

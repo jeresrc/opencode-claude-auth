@@ -1,4 +1,4 @@
-import * as Plugin from "@opencode-ai/plugin/v2/promise"
+import { Plugin } from "@opencode-ai/plugin"
 import { applyAnthropicCatalog } from "./catalog.ts"
 import { reconcileConnectedCredential } from "./credential-sync.ts"
 import { startProactiveRefresh } from "./credentials.ts"
@@ -21,17 +21,17 @@ type RuntimeSessionContext = {
   }
 }
 
-type RuntimeIntegration = Plugin.PluginContext["integration"] &
+type RuntimeIntegration = Plugin.Context["integration"] &
   Parameters<typeof reconcileConnectedCredential>[0]
 
-type RuntimePluginContext = Omit<Plugin.PluginContext, "integration"> & {
+type RuntimePluginContext = Omit<Plugin.Context, "integration"> & {
   readonly integration: RuntimeIntegration
 } & RateLimitNoticeContext &
   RuntimeSessionContext
 
 type RuntimePlugin = Omit<Plugin.Plugin, "setup"> & {
   readonly setup: (
-    context: Plugin.PluginContext,
+    context: Plugin.Context,
   ) => Promise<Cleanup | void> | Cleanup | void
 }
 

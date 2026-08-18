@@ -1,4 +1,4 @@
-import type { CatalogDraft } from "@opencode-ai/plugin/v2/promise"
+import type { CatalogDraft } from "@opencode-ai/plugin/promise/catalog"
 import { ANTHROPIC_INTEGRATION_ID } from "./integration.ts"
 
 const ANTHROPIC_PROVIDER_ID = "anthropic"

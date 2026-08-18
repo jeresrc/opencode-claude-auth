@@ -1,4 +1,4 @@
-import type { IntegrationDraft } from "@opencode-ai/plugin/v2/promise"
+import type { IntegrationDraft } from "@opencode-ai/plugin/promise/integration"
 import { refreshIfNeeded, type RefreshOptions } from "./credentials.ts"
 import {
   PRIMARY_SERVICE,

@@ -1,4 +1,8 @@
-import type { FinishReasonDetails, LLMEvent, Model } from "@opencode-ai/ai"
+import type {
+  FinishReasonDetails,
+  LanguageModel,
+  LLMEvent,
+} from "@opencode-ai/ai"
 import type {
   Definition as ProviderPackageDefinition,
   Settings as ProviderPackageSettings,
@@ -8,7 +12,7 @@ import type {
   ProtocolDef as ProtocolShape,
   TransportDef as Transport,
 } from "@opencode-ai/ai/route"
-import { Effect, Layer, Stream } from "effect"
+import { Effect, Layer } from "effect"
 import { FetchHttpClient } from "effect/unstable/http"
 import { createClaudeFetch } from "./claude-fetch.ts"
 import {
@@ -35,10 +39,6 @@ const providerRuntime: ProviderRuntime | undefined = isBunRuntime
   : undefined
 
 type FetchFn = typeof fetch
-type TransportStream<Body, Prepared, Frame> = ReturnType<
-  Transport<Body, Prepared, Frame>["frames"]
->
-
 export interface Settings extends ProviderPackageSettings {
   readonly apiKey?: string
   readonly baseURL?: string
@@ -89,28 +89,20 @@ function withExecutor<Body, Prepared, Frame>(
   return {
     ...transport,
     prepare: transport.prepare,
-    frames: (
-      prepared,
-      request,
-      runtime,
-    ): TransportStream<Body, Prepared, Frame> => {
-      // Pinned Effect/@opencode-ai/ai types disagree at this executor/stream boundary.
-      // The casts isolate that drift without changing runtime stream composition.
-      const frames = Effect.gen(function* () {
+    execute: (prepared, request, runtime, options) =>
+      Effect.gen(function* () {
         const loadedRuntime = providerRuntime
         if (loadedRuntime === undefined) {
           throw new Error("OpenCode provider runtime is unavailable")
         }
-        const http = yield* loadedRuntime.route.RequestExecutor.Service as any
-        return transport.frames(prepared, request, { ...runtime, http })
-      }).pipe(Effect.provide(layer))
-
-      return Stream.unwrap(frames as never) as TransportStream<
-        Body,
-        Prepared,
-        Frame
-      >
-    },
+        const http = yield* loadedRuntime.route.RequestExecutor.Service
+        return yield* transport.execute(
+          prepared,
+          request,
+          { ...runtime, http },
+          options,
+        )
+      }).pipe(Effect.provide(layer)),
   }
 }
 
@@ -173,7 +165,7 @@ export function withTerminalFinishReasonFallback<Body, Frame, Event, State>(
   return runtime.route.Protocol.make({ ...protocol, stream })
 }
 
-export const model = ((modelID: string, settings: Settings): Model => {
+export const model = ((modelID: string, settings: Settings): LanguageModel => {
   const accessToken = requireAccessToken(settings)
   const runtime = providerRuntime
   if (runtime === undefined) {
