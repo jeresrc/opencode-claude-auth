@@ -14,6 +14,8 @@ type Creds = {
   expiresAt: number
 }
 
+const NOOP_SYNC = (_creds: Creds): void => {}
+
 async function loadCredentialsWithCountingKeychain(
   initialExpiresAt: number,
   options: {
@@ -26,9 +28,10 @@ async function loadCredentialsWithCountingKeychain(
   credentialsModule: {
     getCachedCredentials: () => Creds | null
     getCredentialsForSync: () => Creds | null
-    reloadPrimaryCredentials: () => Creds | null
+    reloadPrimaryCredentials: (sync?: (creds: Creds) => void) => Creds | null
     forceRefreshPrimaryCredentials: (
       refresh?: (refreshToken: string) => Creds | null,
+      sync?: (creds: Creds) => void,
     ) => Creds | null
     invalidateCredentialCache: () => void
     refreshIfNeeded: (
@@ -41,6 +44,7 @@ async function loadCredentialsWithCountingKeychain(
         force?: boolean
         reloadSource?: boolean
         refreshThresholdMs?: number
+        sync?: (creds: Creds) => void
       },
     ) => Creds | null
     initAccounts: (accounts: unknown[]) => void
@@ -51,6 +55,7 @@ async function loadCredentialsWithCountingKeychain(
       clearInterval?: typeof clearInterval
       now?: () => number
       refresh?: (refreshToken: string) => Creds | null
+      sync?: (creds: Creds) => void
     }) => () => void
   }
   keychainModule: {
@@ -157,9 +162,10 @@ export function __setCredentials(c) {
     credentialsModule: credentialsModule as {
       getCachedCredentials: () => Creds | null
       getCredentialsForSync: () => Creds | null
-      reloadPrimaryCredentials: () => Creds | null
+      reloadPrimaryCredentials: (sync?: (creds: Creds) => void) => Creds | null
       forceRefreshPrimaryCredentials: (
         refresh?: (refreshToken: string) => Creds | null,
+        sync?: (creds: Creds) => void,
       ) => Creds | null
       invalidateCredentialCache: () => void
       refreshIfNeeded: (
@@ -172,6 +178,7 @@ export function __setCredentials(c) {
           force?: boolean
           reloadSource?: boolean
           refreshThresholdMs?: number
+          sync?: (creds: Creds) => void
         },
       ) => Creds | null
       initAccounts: (accounts: unknown[]) => void
@@ -182,6 +189,7 @@ export function __setCredentials(c) {
         clearInterval?: typeof clearInterval
         now?: () => number
         refresh?: (refreshToken: string) => Creds | null
+        sync?: (creds: Creds) => void
       }) => () => void
     },
     keychainModule: keychainModule as {
@@ -774,6 +782,78 @@ describe("credential caching", () => {
     }
   })
 
+  it("startProactiveRefresh synchronizes fresh source credentials at startup", async () => {
+    const originalNow = Date.now
+    const now = 1_700_000_000_000
+    Date.now = () => now
+
+    try {
+      const { credentialsModule } = await loadCredentialsWithCountingKeychain(
+        now + 2 * 60 * 60_000,
+      )
+      const synced: Creds[] = []
+
+      const cleanup = credentialsModule.startProactiveRefresh({
+        setInterval: (() => "timer-id" as never) as typeof setInterval,
+        clearInterval: (() => undefined) as typeof clearInterval,
+        now: () => now,
+        sync: (creds) => synced.push({ ...creds }),
+      })
+
+      assert.equal(synced.length, 1)
+      assert.equal(synced[0]?.accessToken, "token")
+      cleanup()
+    } finally {
+      Date.now = originalNow
+    }
+  })
+
+  it("startProactiveRefresh synchronizes only after refresh writeback succeeds", async () => {
+    const originalNow = Date.now
+    const now = 1_700_000_000_000
+    Date.now = () => now
+
+    try {
+      const refreshed = {
+        accessToken: "new-token",
+        refreshToken: "new-refresh",
+        expiresAt: now + 10 * 60 * 60_000,
+      }
+      const success = await loadCredentialsWithCountingKeychain(
+        now + 30 * 60_000,
+      )
+      const successSyncs: Creds[] = []
+      const successCleanup = success.credentialsModule.startProactiveRefresh({
+        setInterval: (() => "success-timer" as never) as typeof setInterval,
+        clearInterval: (() => undefined) as typeof clearInterval,
+        now: () => now,
+        refresh: () => refreshed,
+        sync: (creds) => successSyncs.push({ ...creds }),
+      })
+
+      assert.deepEqual(successSyncs, [refreshed])
+      successCleanup()
+
+      const failure = await loadCredentialsWithCountingKeychain(
+        now + 30 * 60_000,
+        { writeBackResult: false },
+      )
+      const failureSyncs: Creds[] = []
+      const failureCleanup = failure.credentialsModule.startProactiveRefresh({
+        setInterval: (() => "failure-timer" as never) as typeof setInterval,
+        clearInterval: (() => undefined) as typeof clearInterval,
+        now: () => now,
+        refresh: () => refreshed,
+        sync: (creds) => failureSyncs.push({ ...creds }),
+      })
+
+      assert.deepEqual(failureSyncs, [])
+      failureCleanup()
+    } finally {
+      Date.now = originalNow
+    }
+  })
+
   it("startProactiveRefresh seeds the primary account when startup reconciliation only read keychain", async () => {
     const originalNow = Date.now
     const now = 1_700_000_000_000
@@ -889,7 +969,7 @@ describe("credential caching", () => {
       expiresAt: now + 10 * 60_000,
     })
 
-    const result = credentialsModule.reloadPrimaryCredentials()
+    const result = credentialsModule.reloadPrimaryCredentials(NOOP_SYNC)
 
     assert.ok(result)
     assert.equal(result.accessToken, "rotated-token")
@@ -919,18 +999,21 @@ describe("credential caching", () => {
         refreshToken: "oauth-refreshed-refresh",
         expiresAt: now + 10 * 60 * 60_000,
       }
+      const synced: Creds[] = []
 
       const result = credentialsModule.forceRefreshPrimaryCredentials(
         (token) => {
           assert.equal(token, "refresh-token")
           return newCreds
         },
+        (creds) => synced.push({ ...creds }),
       )
 
       assert.ok(result)
       assert.equal(result.accessToken, "oauth-refreshed-token")
       assert.equal(account.credentials.accessToken, "oauth-refreshed-token")
       assert.equal(keychainModule.__getWriteCount(), 1)
+      assert.deepEqual(synced, [newCreds])
       assert.equal(
         credentialsModule.getCachedCredentials()?.accessToken,
         "oauth-refreshed-token",
@@ -985,12 +1068,12 @@ describe("credential caching", () => {
         retries: 3,
         sleep: async () => {},
         authRecovery: {
-          reload: () => credentialsModule.reloadPrimaryCredentials(),
+          reload: () => credentialsModule.reloadPrimaryCredentials(NOOP_SYNC),
           refresh: () =>
             credentialsModule.forceRefreshPrimaryCredentials((refreshToken) => {
               assert.equal(refreshToken, "old-refresh")
               return newCreds
-            }),
+            }, NOOP_SYNC),
         },
       })
 
@@ -1061,12 +1144,12 @@ describe("credential caching", () => {
         retries: 3,
         sleep: async () => {},
         authRecovery: {
-          reload: () => credentialsModule.reloadPrimaryCredentials(),
+          reload: () => credentialsModule.reloadPrimaryCredentials(NOOP_SYNC),
           refresh: () =>
             credentialsModule.forceRefreshPrimaryCredentials((refreshToken) => {
               assert.equal(refreshToken, "old-refresh")
               return newCreds
-            }),
+            }, NOOP_SYNC),
         },
       })
 

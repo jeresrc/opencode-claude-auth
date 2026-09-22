@@ -231,7 +231,8 @@ describe("Anthropic integration registration", () => {
     assert.equal(refreshAccount.credentials.accessToken, "access-stale")
     assert.equal(refreshAccount.credentials.refreshToken, "refresh-stale")
     assert.equal(refreshAccount.credentials.expiresAt, 1_700_000_900_000)
-    assert.deepEqual(refreshOptions, { reloadSource: true })
+    assert.equal(refreshOptions?.reloadSource, true)
+    assert.equal(typeof refreshOptions?.sync, "function")
     assert.deepEqual(refreshed, {
       type: "oauth",
       methodID: CLAUDE_CODE_METHOD_ID,

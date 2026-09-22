@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import type { SystemPart } from "@opencode-ai/ai"
+import type { SystemPart } from "@opencode/ai"
 import {
   CLAUDE_CODE_IDENTITY,
   injectClaudeIdentity,

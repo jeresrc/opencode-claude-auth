@@ -1,17 +1,13 @@
-import type {
-  FinishReasonDetails,
-  LanguageModel,
-  LLMEvent,
-} from "@opencode-ai/ai"
+import type { FinishReasonDetails, LanguageModel, LLMEvent } from "@opencode/ai"
 import type {
   Definition as ProviderPackageDefinition,
   Settings as ProviderPackageSettings,
-} from "@opencode-ai/ai/provider-package"
-import type { AnthropicMessagesBody } from "@opencode-ai/ai/protocols/anthropic-messages"
+} from "@opencode/ai/provider-package"
+import type { AnthropicMessagesBody } from "@opencode/ai/protocols/anthropic-messages"
 import type {
   ProtocolDef as ProtocolShape,
   TransportDef as Transport,
-} from "@opencode-ai/ai/route"
+} from "@opencode/ai/route"
 import { Effect, Layer } from "effect"
 import { FetchHttpClient } from "effect/unstable/http"
 import { createClaudeFetch } from "./claude-fetch.ts"
@@ -20,10 +16,11 @@ import {
   reloadPrimaryCredentials,
 } from "./credentials.ts"
 
-type RouteRuntime = typeof import("@opencode-ai/ai/route")
+type RouteRuntime = typeof import("@opencode/ai/route")
 type AnthropicMessagesRuntime =
-  typeof import("@opencode-ai/ai/protocols/anthropic-messages")
+  typeof import("@opencode/ai/protocols/anthropic-messages")
 type ProviderRuntime = {
+  readonly ai: typeof import("@opencode/ai")
   readonly route: RouteRuntime
   readonly anthropic: AnthropicMessagesRuntime
 }
@@ -33,8 +30,9 @@ const isBunRuntime =
   "undefined"
 const providerRuntime: ProviderRuntime | undefined = isBunRuntime
   ? {
-      route: await import("@opencode-ai/ai/route"),
-      anthropic: await import("@opencode-ai/ai/protocols/anthropic-messages"),
+      ai: await import("@opencode/ai"),
+      route: await import("@opencode/ai/route"),
+      anthropic: await import("@opencode/ai/protocols/anthropic-messages"),
     }
   : undefined
 
@@ -43,6 +41,7 @@ export interface Settings extends ProviderPackageSettings {
   readonly apiKey?: string
   readonly baseURL?: string
   readonly fetch?: FetchFn
+  readonly maxTokens?: number
 }
 
 function requireAccessToken(settings: Settings): string {
@@ -88,7 +87,20 @@ function withExecutor<Body, Prepared, Frame>(
 ): Transport<Body, Prepared, Frame> {
   return {
     ...transport,
-    prepare: transport.prepare,
+    prepare: (input) => {
+      if (providerRuntime === undefined) {
+        throw new Error("OpenCode provider runtime is unavailable")
+      }
+      // The compiled host has its own LanguageModel class. Native transport
+      // validates with instanceof, so normalize only at this module boundary.
+      return transport.prepare({
+        ...input,
+        request: {
+          ...input.request,
+          model: providerRuntime.ai.LanguageModel.make(input.request.model),
+        },
+      })
+    },
     execute: (prepared, request, runtime, options) =>
       Effect.gen(function* () {
         const loadedRuntime = providerRuntime
@@ -133,8 +145,6 @@ export function withTerminalFinishReasonFallback<Body, Frame, Event, State>(
   protocol: ProtocolShape<Body, Frame, Event, State>,
 ): ProtocolShape<Body, Frame, Event, State> {
   const onHalt = protocol.stream.onHalt
-  // Pinned Effect versions differ between plugin (.83) and @opencode-ai/ai (.98);
-  // keep the cast at the operator boundary while typing the event tuple above.
   const mapStepEvents = Effect.map(
     ([nextState, events]: readonly [State, ReadonlyArray<LLMEvent>]): readonly [
       State,
@@ -154,7 +164,8 @@ export function withTerminalFinishReasonFallback<Body, Frame, Event, State>(
       : {
           ...protocol.stream,
           step,
-          onHalt: (state: State) => normalizeTerminalEvents(onHalt(state)),
+          onHalt: (state: State) =>
+            onHalt(state).pipe(Effect.map(normalizeTerminalEvents)),
         }
 
   const runtime = providerRuntime
@@ -167,15 +178,26 @@ export function withTerminalFinishReasonFallback<Body, Frame, Event, State>(
 
 export const model = ((modelID: string, settings: Settings): LanguageModel => {
   const accessToken = requireAccessToken(settings)
+  const {
+    apiKey: _apiKey,
+    baseURL: _baseURL,
+    fetch: _fetch,
+    headers: _headers,
+    body: _body,
+    maxTokens,
+    source: _source,
+    metadata: _metadata,
+    ...providerOptions
+  } = settings
   const runtime = providerRuntime
   if (runtime === undefined) {
     throw new Error("OpenCode provider runtime is unavailable")
   }
 
-  const { Auth, Endpoint, HttpTransport, Route } = runtime.route
+  const { Auth, Endpoint, Route } = runtime.route
   const { AnthropicMessages } = runtime.anthropic
   const transport = withExecutor(
-    HttpTransport.sseJson.with<AnthropicMessagesBody>(),
+    AnthropicMessages.transport<AnthropicMessagesBody>(),
     executorLayer(accessToken, settings.fetch),
   )
 
@@ -197,7 +219,10 @@ export const model = ((modelID: string, settings: Settings): LanguageModel => {
         settings.body === undefined
           ? undefined
           : { body: { ...settings.body } },
-      limits: settings.limits,
+      generation: { maxTokens: maxTokens ?? 32_000 },
+      providerOptions: Object.keys(providerOptions).length
+        ? providerOptions
+        : undefined,
     },
   })
 

@@ -15,8 +15,8 @@ async function runBun(script: string): Promise<string> {
 const commonImports = String.raw`
 import assert from "node:assert/strict"
 import { Effect, Layer, Stream } from "effect"
-import { LLM, LLMClient } from "@opencode-ai/ai"
-import { RequestExecutor } from "@opencode-ai/ai/route"
+import { LLM, LLMClient } from "@opencode/ai"
+import { RequestExecutor } from "@opencode/ai/route"
 import { model } from "./src/provider.ts"
 `
 
@@ -88,6 +88,34 @@ const selected = model("claude-sonnet-4-6", { apiKey: "access-token" })
 assert.equal(selected.id, "claude-sonnet-4-6")
 assert.equal(String(selected.provider), "anthropic")
 assert.equal(selected.route.id, "anthropic-messages")
+`)
+})
+
+test("provider applies default and configured output capacity through the request executor", async () => {
+  await runBun(String.raw`
+${commonImports}
+const bodies = []
+const fakeFetch = async (_input, init) => {
+  bodies.push(JSON.parse(init.body))
+  return new Response(${JSON.stringify(textSse)}, {
+    headers: { "content-type": "text/event-stream" },
+  })
+}
+for (const maxTokens of [undefined, 64000]) {
+  const selected = model("claude-opus-5-5", {
+    apiKey: "access-token",
+    fetch: fakeFetch,
+    maxTokens,
+  })
+  await Effect.runPromise(
+    LLM.generate(LLM.request({ model: selected, prompt: "hello" })).pipe(
+      Effect.provide(LLMClient.layer.pipe(Layer.provide(Layer.succeed(RequestExecutor.Service, {
+        execute: () => Effect.die(new Error("global executor should not be used")),
+      })))),
+    ),
+  )
+}
+assert.deepEqual(bodies.map(body => body.max_tokens), [32000, 64000])
 `)
 })
 
@@ -306,7 +334,7 @@ test("settings metadata such as source is not forwarded to provider options or H
   await runBun(String.raw`
 import assert from "node:assert/strict"
 import { Effect } from "effect"
-import { LLM, LLMClient } from "@opencode-ai/ai"
+import { LLM, LLMClient } from "@opencode/ai"
 import { model } from "./src/provider.ts"
 
 const selected = model("claude-sonnet-4-6", {
@@ -363,8 +391,8 @@ test("protocol fallback normalizes missing route terminal reasons before route g
   await runBun(String.raw`
 import assert from "node:assert/strict"
 import { Effect, Layer, Schema, Stream } from "effect"
-import { LLM, LLMClient } from "@opencode-ai/ai"
-import { Endpoint, Protocol, RequestExecutor, Route } from "@opencode-ai/ai/route"
+import { LLM, LLMClient } from "@opencode/ai"
+import { Endpoint, Protocol, RequestExecutor, Route } from "@opencode/ai/route"
 import { withTerminalFinishReasonFallback } from "./src/provider.ts"
 
 const frames = [
@@ -428,8 +456,8 @@ test("protocol fallback rejects present invalid finish reasons and preserves val
   await runBun(String.raw`
 import assert from "node:assert/strict"
 import { Effect, Layer, Schema, Stream } from "effect"
-import { LLM, LLMClient } from "@opencode-ai/ai"
-import { Endpoint, Protocol, RequestExecutor, Route } from "@opencode-ai/ai/route"
+import { LLM, LLMClient } from "@opencode/ai"
+import { Endpoint, Protocol, RequestExecutor, Route } from "@opencode/ai/route"
 import { withTerminalFinishReasonFallback } from "./src/provider.ts"
 
 function routeFor(frames) {
@@ -541,7 +569,7 @@ test("pinned native provider can prepare an Anthropic request without sending HT
   await runBun(String.raw`
 import assert from "node:assert/strict"
 import { Effect } from "effect"
-import { LLM, LLMClient } from "@opencode-ai/ai"
+import { LLM, LLMClient } from "@opencode/ai"
 import { model } from "./src/provider.ts"
 
 const selected = model("claude-sonnet-4-6", {
@@ -558,5 +586,48 @@ assert.equal(selected.route.id, "anthropic-messages")
 assert.equal(body.model, "claude-sonnet-4-6")
 assert.equal(body.stream, true)
 assert.equal(body.messages.at(-1).role, "user")
+`)
+})
+
+test("Opus 5.5 thinking binding sends the protocol-required beta header", async () => {
+  await runBun(String.raw`
+${commonImports}
+let sent
+const selected = model("claude-opus-5-5", {
+  apiKey: "access-token",
+  thinking: { type: "adaptive", display: "summarized" },
+  effort: "high",
+  fetch: async (_input, init) => {
+    sent = { body: JSON.parse(init.body), headers: new Headers(init.headers) }
+    return new Response(${JSON.stringify(textSse)}, {
+      headers: { "content-type": "text/event-stream" },
+    })
+  },
+})
+const unusedExecutor = Layer.succeed(RequestExecutor.Service, {
+  execute: () => Effect.die(new Error("global executor should not be used")),
+})
+await Effect.runPromise(
+  LLM.generate(LLM.request({ model: selected, prompt: "hello" })).pipe(
+    Effect.provide(LLMClient.layer.pipe(Layer.provide(unusedExecutor))),
+  ),
+)
+assert.equal(sent.body.thinking.block_binding.prefix_mismatch_behavior, "drop_block")
+assert.equal(sent.body.output_config.effort, "high")
+assert.ok(sent.headers.get("anthropic-beta").split(",").includes("thinking-binding-controls-2026-08-01"))
+`)
+})
+
+test("transport accepts models constructed by the host's separate SDK instance", async () => {
+  await runBun(String.raw`
+${commonImports}
+const selected = model("claude-opus-5-5", { apiKey: "access-token" })
+const request = LLM.request({ model: selected, prompt: "hello" })
+const body = await Effect.runPromise(selected.route.body.from(request))
+const foreignRequest = { ...request, model: { ...selected } }
+const foreignModel = foreignRequest.model
+const prepared = await Effect.runPromise(selected.route.prepareTransport(body, foreignRequest))
+assert.ok(prepared.request.headers["anthropic-beta"].includes("thinking-binding-controls-2026-08-01"))
+assert.equal(foreignRequest.model, foreignModel)
 `)
 })

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import type { CatalogDraft } from "@opencode-ai/plugin/promise/catalog"
+import type { ProviderEditor } from "@opencode/plugin/promise/provider"
 import { applyAnthropicCatalog, providerFileUrl } from "./catalog.ts"
 
 type ProviderRecord = {
@@ -8,23 +8,18 @@ type ProviderRecord = {
   models: Map<string, Record<string, unknown>>
 }
 
-function draftFrom(records: ProviderRecord[]): CatalogDraft {
+function draftFrom(records: ProviderRecord[]): ProviderEditor {
   return {
-    provider: {
-      list: () => records as never,
-      get: (providerID) =>
-        records.find((record) => record.provider.id === providerID) as never,
-      update: (providerID, update) => {
-        const record = records.find((entry) => entry.provider.id === providerID)
-        if (record) update(record.provider as never)
-      },
-      remove: () => {},
+    list: () => records as never,
+    get: (providerID) =>
+      records.find((record) => record.provider.id === providerID) as never,
+    update: (providerID, update) => {
+      const record = records.find((entry) => entry.provider.id === providerID)
+      if (record) update(record.provider as never)
     },
-    model: {
-      get: (providerID, modelID) =>
-        records
-          .find((record) => record.provider.id === providerID)
-          ?.models.get(modelID) as never,
+    remove: () => {},
+    add: () => {},
+    models: {
       update: (providerID, modelID, update) => {
         const currentModel = records
           .find((record) => record.provider.id === providerID)
@@ -32,10 +27,7 @@ function draftFrom(records: ProviderRecord[]): CatalogDraft {
         if (currentModel) update(currentModel as never)
       },
       remove: () => {},
-      default: {
-        get: () => undefined,
-        set: () => {},
-      },
+      set: () => {},
     },
   }
 }
@@ -92,7 +84,7 @@ test("routes only the Anthropic provider and its recognized models through the p
   })
   const explicitNativeModel = makeModel({
     id: "claude-explicit-native",
-    package: "@opencode-ai/ai/providers/anthropic",
+    package: "@opencode/ai/providers/anthropic",
   })
   const legacyModel = makeModel({ id: "claude-legacy", package: undefined })
   const customModel = makeModel({
@@ -202,7 +194,7 @@ test("adds a no-effort variant to routed Anthropic models without mutating exist
   })
   const modelWithNone = makeModel({
     id: "claude-existing-none",
-    package: "@opencode-ai/ai/providers/anthropic",
+    package: "@opencode/ai/providers/anthropic",
     variants: [existingNone, { id: "thinking", settings: { effort: "low" } }],
   })
   const customModel = makeModel({

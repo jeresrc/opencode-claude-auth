@@ -136,6 +136,35 @@ describe("parseCredentials", () => {
     )
   })
 
+  it("returns null for a logged-out Claude Code credential shell", () => {
+    assert.equal(
+      parseCredentials(
+        JSON.stringify({
+          claudeAiOauth: {
+            accessToken: "",
+            refreshToken: "",
+            expiresAt: 0,
+            subscriptionType: "team",
+          },
+        }),
+      ),
+      null,
+    )
+  })
+
+  it("returns null for non-finite or non-positive expiry values", () => {
+    assert.equal(
+      parseCredentials(
+        JSON.stringify({
+          accessToken: "at",
+          refreshToken: "rt",
+          expiresAt: -1,
+        }),
+      ),
+      null,
+    )
+  })
+
   it("returns null for invalid JSON", () => {
     assert.equal(parseCredentials("not json {{{"), null)
   })

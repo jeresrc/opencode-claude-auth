@@ -77,6 +77,20 @@ const sessionId = randomUUID()
 
 const DEFAULT_MAX_RETRY_DELAY_MS = 30_000
 const MAX_ERROR_MESSAGE_LENGTH = 1000
+// Bun uses runtime-native names such as ConnectionRefused; cross-fetch and
+// undici-compatible callers can still surface POSIX-style error codes.
+const TRANSIENT_TRANSPORT_ERROR_CODES = new Set([
+  "ConnectionRefused",
+  "ECONNRESET",
+  "EPIPE",
+  "ETIMEDOUT",
+  "ECONNREFUSED",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "ENETDOWN",
+  "ENETUNREACH",
+  "EHOSTUNREACH",
+])
 const JWT_PATTERN =
   /(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+(?![A-Za-z0-9_-])/g
 
@@ -105,6 +119,38 @@ function isReplayableRequest(
   return !(input instanceof Request && input.body)
 }
 
+function isTransientTransportError(error: unknown): boolean {
+  const seen = new Set<unknown>()
+  let current: unknown = error
+  let foundTransient = false
+
+  while (current && !seen.has(current)) {
+    seen.add(current)
+    if (!(current instanceof Error)) return false
+    if (current.name === "AbortError") return false
+
+    const code = "code" in current ? current.code : undefined
+    if (
+      typeof code === "string" &&
+      (TRANSIENT_TRANSPORT_ERROR_CODES.has(code) ||
+        TRANSIENT_TRANSPORT_ERROR_CODES.has(code.toUpperCase()))
+    ) {
+      foundTransient = true
+    }
+
+    const message = current.message.toUpperCase()
+    for (const transientCode of TRANSIENT_TRANSPORT_ERROR_CODES) {
+      if (new RegExp(`\\b${transientCode}\\b`).test(message)) {
+        foundTransient = true
+      }
+    }
+
+    current = current.cause
+  }
+
+  return foundTransient
+}
+
 export async function fetchWithRetry(
   input: RequestInfo | URL,
   init: RequestInit = {},
@@ -114,11 +160,30 @@ export async function fetchWithRetry(
 ): Promise<Response> {
   const attempts = Math.max(1, isReplayableRequest(input, init) ? retries : 1)
   for (let attempt = 0; attempt < attempts; attempt++) {
-    const response = await upstream(input, init)
-    if (
-      (response.status === 429 || response.status === 529) &&
-      attempt < attempts - 1
-    ) {
+    let response: Response
+    try {
+      response = await upstream(input, init)
+    } catch (error) {
+      if (
+        !init.signal?.aborted &&
+        isTransientTransportError(error) &&
+        attempt < attempts - 1
+      ) {
+        // Only pre-response failures are retried. This can replay billable
+        // POSTs after a reset, so keep it limited to replayable bodies.
+        const delayMs = (attempt + 1) * 2000
+        log("fetch_transport_retry", { attempt: attempt + 1, delayMs })
+        await sleep(delayMs)
+        continue
+      }
+      throw error
+    }
+    const isRateLimit = response.status === 429 || response.status === 529
+    const isTransientGateway =
+      response.status === 502 ||
+      response.status === 503 ||
+      response.status === 504
+    if ((isRateLimit || isTransientGateway) && attempt < attempts - 1) {
       const retryAfter = response.headers.get("retry-after")
       const parsed = retryAfter ? parseInt(retryAfter, 10) : NaN
       const delayMs = Number.isNaN(parsed)
@@ -126,15 +191,20 @@ export async function fetchWithRetry(
         : parsed * 1000
 
       if (delayMs > getMaxRetryDelayMs()) {
-        log("fetch_rate_limited_quota", {
-          status: response.status,
-          retryAfter: retryAfter ?? "none",
-          delayMs,
-        })
+        log(
+          isRateLimit
+            ? "fetch_rate_limited_quota"
+            : "fetch_gateway_retry_quota",
+          {
+            status: response.status,
+            retryAfter: retryAfter ?? "none",
+            delayMs,
+          },
+        )
         return response
       }
 
-      log("fetch_rate_limited", {
+      log(isRateLimit ? "fetch_rate_limited" : "fetch_gateway_retry", {
         status: response.status,
         attempt: attempt + 1,
         retryAfter: retryAfter ?? "none",

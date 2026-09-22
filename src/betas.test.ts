@@ -63,8 +63,8 @@ describe("betas", () => {
     }
   })
 
-  it("pins Claude CLI model config to 2.1.217", () => {
-    assert.equal(config.ccVersion, "2.1.217")
+  it("pins Claude CLI model config to 2.1.280", () => {
+    assert.equal(config.ccVersion, "2.1.280")
     assert.ok(!config.baseBetas.includes("effort-2025-11-24"))
     assert.equal(
       config.baseBetas.filter(

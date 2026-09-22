@@ -43,13 +43,22 @@ export function parseCredentials(raw: string): ClaudeCredentials | null {
 
   if (
     typeof creds.accessToken !== "string" ||
+    creds.accessToken.length === 0 ||
     typeof creds.refreshToken !== "string" ||
-    typeof creds.expiresAt !== "number"
+    creds.refreshToken.length === 0 ||
+    typeof creds.expiresAt !== "number" ||
+    !Number.isFinite(creds.expiresAt) ||
+    creds.expiresAt <= 0
   ) {
     log("credentials_parsed", {
-      hasAccessToken: typeof creds.accessToken === "string",
-      hasRefreshToken: typeof creds.refreshToken === "string",
-      hasExpiry: typeof creds.expiresAt === "number",
+      hasAccessToken:
+        typeof creds.accessToken === "string" && creds.accessToken.length > 0,
+      hasRefreshToken:
+        typeof creds.refreshToken === "string" && creds.refreshToken.length > 0,
+      hasExpiry:
+        typeof creds.expiresAt === "number" &&
+        Number.isFinite(creds.expiresAt) &&
+        creds.expiresAt > 0,
       isMcpOnly: false,
     })
     return null

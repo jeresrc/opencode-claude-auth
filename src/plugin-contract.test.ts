@@ -8,7 +8,7 @@ const root = new URL("..", import.meta.url)
 const src = new URL(".", import.meta.url)
 
 before(async () => {
-  await execFileAsync("pnpm", ["run", "build"], {
+  await execFileAsync("bun", ["run", "build"], {
     cwd: root,
     env: { ...process.env, CLAUDE_AUTH_DEBUG: "" },
   })

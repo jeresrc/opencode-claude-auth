@@ -1,5 +1,9 @@
-import type { IntegrationDraft } from "@opencode-ai/plugin/promise/integration"
-import { refreshIfNeeded, type RefreshOptions } from "./credentials.ts"
+import type { IntegrationEditor } from "@opencode/plugin/promise/integration"
+import {
+  refreshIfNeeded,
+  syncAuthJson,
+  type RefreshOptions,
+} from "./credentials.ts"
 import {
   PRIMARY_SERVICE,
   readAllClaudeAccounts,
@@ -111,7 +115,7 @@ function selectAccountForSource(
 }
 
 export function registerAnthropicIntegration(
-  draft: IntegrationDraft,
+  draft: IntegrationEditor,
   deps: Partial<IntegrationDeps> = {},
 ): void {
   const resolvedDeps = { ...defaultDeps, ...deps }
@@ -152,6 +156,7 @@ export function registerAnthropicIntegration(
       }
       const refreshed = resolvedDeps.refreshIfNeeded(account, {
         reloadSource: true,
+        sync: syncAuthJson,
       })
       if (!refreshed) {
         throw new Error(

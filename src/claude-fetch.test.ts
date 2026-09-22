@@ -887,6 +887,167 @@ describe("Claude OAuth fetch pipeline", () => {
     assert.deepEqual(slept, [2000, 4000])
   })
 
+  it("retries transient 502, 503, and 504 gateway responses", async () => {
+    const statuses = [502, 503, 504, 200]
+    const slept: number[] = []
+    let calls = 0
+    const upstream = (async () => {
+      const status = statuses[calls++]
+      return new Response(status === 200 ? "ok" : "gateway error", { status })
+    }) as typeof fetch
+
+    const response = await fetchWithRetry(
+      "https://example.test",
+      {},
+      4,
+      upstream,
+      async (ms) => {
+        slept.push(ms)
+      },
+    )
+
+    assert.equal(response.status, 200)
+    assert.equal(calls, 4)
+    assert.deepEqual(slept, [2000, 4000, 6000])
+  })
+
+  it("retries transient transport errors for replayable request bodies", async () => {
+    const requestBodies: string[] = []
+    const slept: number[] = []
+    const body = JSON.stringify({
+      model: "claude-sonnet-4-6",
+      messages: [{ role: "user", content: "x".repeat(2 * 1024 * 1024) }],
+    })
+    let calls = 0
+    const upstream = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      calls += 1
+      assert.equal(typeof init?.body, "string")
+      requestBodies.push(init.body)
+      if (calls === 1) {
+        throw new TypeError("fetch failed", {
+          cause: Object.assign(new Error("socket hang up"), {
+            code: "ECONNRESET",
+          }),
+        })
+      }
+      return new Response("ok", { status: 200 })
+    }) as typeof fetch
+
+    const response = await fetchWithRetry(
+      "https://example.test",
+      { method: "POST", body },
+      3,
+      upstream,
+      async (ms) => {
+        slept.push(ms)
+      },
+    )
+
+    assert.equal(response.status, 200)
+    assert.equal(calls, 2)
+    assert.deepEqual(requestBodies, [body, body])
+    assert.deepEqual(slept, [2000])
+  })
+
+  it("retries Bun top-level ECONNRESET transport errors with no cause", async () => {
+    const requestBodies: string[] = []
+    const slept: number[] = []
+    const body = JSON.stringify({
+      model: "claude-sonnet-4-6",
+      messages: [{ role: "user", content: "x".repeat(2 * 1024 * 1024) }],
+    })
+    let calls = 0
+    const upstream = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      calls += 1
+      assert.equal(typeof init?.body, "string")
+      requestBodies.push(init.body)
+      if (calls === 1) {
+        throw Object.assign(
+          new Error("The socket connection was closed unexpectedly."),
+          { code: "ECONNRESET" },
+        )
+      }
+      return new Response("ok", { status: 200 })
+    }) as typeof fetch
+
+    const response = await fetchWithRetry(
+      "https://example.test",
+      { method: "POST", body },
+      3,
+      upstream,
+      async (ms) => {
+        slept.push(ms)
+      },
+    )
+
+    assert.equal(response.status, 200)
+    assert.equal(calls, 2)
+    assert.deepEqual(requestBodies, [body, body])
+    assert.deepEqual(slept, [2000])
+  })
+
+  it("retries Bun ConnectionRefused transport errors", async () => {
+    const slept: number[] = []
+    let calls = 0
+    const upstream = (async () => {
+      calls += 1
+      if (calls === 1) {
+        throw Object.assign(new Error("Connection refused"), {
+          code: "ConnectionRefused",
+        })
+      }
+      return new Response("ok", { status: 200 })
+    }) as typeof fetch
+
+    const response = await fetchWithRetry(
+      "https://example.test",
+      { method: "POST", body: "{}" },
+      3,
+      upstream,
+      async (ms) => {
+        slept.push(ms)
+      },
+    )
+
+    assert.equal(response.status, 200)
+    assert.equal(calls, 2)
+    assert.deepEqual(slept, [2000])
+  })
+
+  it("rethrows the final transient transport error after retry exhaustion", async () => {
+    const errors = [
+      Object.assign(new Error("first reset"), { code: "ECONNRESET" }),
+      Object.assign(new Error("second reset"), { code: "ECONNRESET" }),
+      Object.assign(new Error("final reset"), { code: "ECONNRESET" }),
+    ]
+    const slept: number[] = []
+    let calls = 0
+    const upstream = (async () => {
+      const error = errors[calls]
+      calls += 1
+      throw error
+    }) as typeof fetch
+
+    await assert.rejects(
+      fetchWithRetry(
+        "https://example.test",
+        { method: "POST", body: "{}" },
+        3,
+        upstream,
+        async (ms) => {
+          slept.push(ms)
+        },
+      ),
+      (actual) => {
+        assert.equal(actual, errors[2])
+        return true
+      },
+    )
+
+    assert.equal(calls, 3)
+    assert.deepEqual(slept, [2000, 4000])
+  })
+
   it("does not retry retryable responses when the request body is a one-shot stream", async () => {
     const originalWarn = console.warn
     let calls = 0
@@ -925,6 +1086,231 @@ describe("Claude OAuth fetch pipeline", () => {
     } finally {
       console.warn = originalWarn
     }
+  })
+
+  it("does not retry transport errors when the request body is a one-shot stream", async () => {
+    const error = Object.assign(new Error("socket hang up"), {
+      code: "ECONNRESET",
+    })
+    const slept: number[] = []
+    let calls = 0
+    const upstream = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      calls += 1
+      assert.ok(init?.body instanceof ReadableStream)
+      await new Response(init.body).text()
+      throw error
+    }) as typeof fetch
+
+    await assert.rejects(
+      fetchWithRetry(
+        "https://example.test",
+        {
+          method: "POST",
+          body: new ReadableStream({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode('{"model":"claude"}'))
+              controller.close()
+            },
+          }),
+        },
+        3,
+        upstream,
+        async (ms) => {
+          slept.push(ms)
+        },
+      ),
+      (actual) => {
+        assert.equal(actual, error)
+        return true
+      },
+    )
+
+    assert.equal(calls, 1)
+    assert.deepEqual(slept, [])
+  })
+
+  it("does not retry AbortError transport errors when a transient code appears first", async () => {
+    const abortError = Object.assign(new Error("operation aborted"), {
+      name: "AbortError",
+    })
+    const error = new TypeError("fetch failed", {
+      cause: Object.assign(new Error("socket hang up"), {
+        code: "ECONNRESET",
+        cause: abortError,
+      }),
+    })
+    const slept: number[] = []
+    let calls = 0
+    const upstream = (async () => {
+      calls += 1
+      throw error
+    }) as typeof fetch
+
+    await assert.rejects(
+      fetchWithRetry(
+        "https://example.test",
+        { method: "POST", body: "{}" },
+        3,
+        upstream,
+        async (ms) => {
+          slept.push(ms)
+        },
+      ),
+      (actual) => {
+        assert.equal(actual, error)
+        return true
+      },
+    )
+
+    assert.equal(calls, 1)
+    assert.deepEqual(slept, [])
+  })
+
+  it("does not retry transport errors when the effective request signal is aborted", async () => {
+    const controller = new AbortController()
+    controller.abort()
+    const error = Object.assign(new Error("socket hang up"), {
+      code: "ECONNRESET",
+    })
+    const slept: number[] = []
+    let calls = 0
+    const upstream = (async () => {
+      calls += 1
+      throw error
+    }) as typeof fetch
+
+    await assert.rejects(
+      fetchWithRetry(
+        "https://example.test",
+        { method: "POST", body: "{}", signal: controller.signal },
+        3,
+        upstream,
+        async (ms) => {
+          slept.push(ms)
+        },
+      ),
+      (actual) => {
+        assert.equal(actual, error)
+        return true
+      },
+    )
+
+    assert.equal(calls, 1)
+    assert.deepEqual(slept, [])
+  })
+
+  it("does not retry unknown application transport errors and preserves identity", async () => {
+    const error = new TypeError("boom")
+    const slept: number[] = []
+    let calls = 0
+    const upstream = (async () => {
+      calls += 1
+      throw error
+    }) as typeof fetch
+
+    await assert.rejects(
+      fetchWithRetry(
+        "https://example.test",
+        { method: "POST", body: "{}" },
+        3,
+        upstream,
+        async (ms) => {
+          slept.push(ms)
+        },
+      ),
+      (actual) => {
+        assert.equal(actual, error)
+        return true
+      },
+    )
+
+    assert.equal(calls, 1)
+    assert.deepEqual(slept, [])
+  })
+
+  it("retries message-only transient transport errors", async () => {
+    const slept: number[] = []
+    let calls = 0
+    const upstream = (async () => {
+      calls += 1
+      if (calls === 1) throw new TypeError("fetch failed: EPIPE")
+      return new Response("ok", { status: 200 })
+    }) as typeof fetch
+
+    const response = await fetchWithRetry(
+      "https://example.test",
+      { method: "POST", body: "{}" },
+      3,
+      upstream,
+      async (ms) => {
+        slept.push(ms)
+      },
+    )
+
+    assert.equal(response.status, 200)
+    assert.equal(calls, 2)
+    assert.deepEqual(slept, [2000])
+  })
+
+  it("does not retry embedded transport errors code substrings", async () => {
+    const error = new TypeError("upstream echoed token XECONNRESETY")
+    const slept: number[] = []
+    let calls = 0
+    const upstream = (async () => {
+      calls += 1
+      throw error
+    }) as typeof fetch
+
+    await assert.rejects(
+      fetchWithRetry(
+        "https://example.test",
+        { method: "POST", body: "{}" },
+        3,
+        upstream,
+        async (ms) => {
+          slept.push(ms)
+        },
+      ),
+      (actual) => {
+        assert.equal(actual, error)
+        return true
+      },
+    )
+
+    assert.equal(calls, 1)
+    assert.deepEqual(slept, [])
+  })
+
+  it("retries transient transport errors in a cause chain deeper than one level", async () => {
+    const slept: number[] = []
+    let calls = 0
+    const upstream = (async () => {
+      calls += 1
+      if (calls === 1) {
+        throw new TypeError("fetch failed", {
+          cause: new Error("wrapper", {
+            cause: Object.assign(new Error("socket hang up"), {
+              code: "ECONNRESET",
+            }),
+          }),
+        })
+      }
+      return new Response("ok", { status: 200 })
+    }) as typeof fetch
+
+    const response = await fetchWithRetry(
+      "https://example.test",
+      { method: "POST", body: "{}" },
+      3,
+      upstream,
+      async (ms) => {
+        slept.push(ms)
+      },
+    )
+
+    assert.equal(response.status, 200)
+    assert.equal(calls, 2)
+    assert.deepEqual(slept, [2000])
   })
 
   it("honors retry-after delay caps and env overrides without sleeping when capped", async () => {

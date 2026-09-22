@@ -1,11 +1,48 @@
 import assert from "node:assert/strict"
-import { access, readFile } from "node:fs/promises"
-import test from "node:test"
+import {
+  access,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import test, { after } from "node:test"
 import { applyAnthropicCatalog } from "./catalog.ts"
 import { initAccounts } from "./credentials.ts"
 import plugin from "./index.ts"
 import { registerAnthropicIntegration } from "./integration.ts"
 import { injectClaudeIdentity } from "./session-context.ts"
+
+const originalHome = process.env.HOME
+const testHome = await mkdtemp(join(tmpdir(), "opencode-claude-auth-index-"))
+process.env.HOME = testHome
+
+async function writeTestClaudeCredentials(expiresAt: number): Promise<void> {
+  const claudeDir = join(testHome, ".claude")
+  await mkdir(claudeDir, { recursive: true })
+  await writeFile(
+    join(claudeDir, ".credentials.json"),
+    JSON.stringify({
+      claudeAiOauth: {
+        accessToken: "fresh-token",
+        refreshToken: "fresh-refresh",
+        expiresAt,
+      },
+    }),
+    { mode: 0o600 },
+  )
+}
+
+await writeTestClaudeCredentials(Date.now() + 2 * 60 * 60_000)
+
+after(async () => {
+  if (originalHome === undefined) delete process.env.HOME
+  else process.env.HOME = originalHome
+  await rm(testHome, { recursive: true, force: true })
+})
 
 test("entrypoint exposes only the default v2 plugin export", async () => {
   const entrypoint = await import("./index.ts")
@@ -64,9 +101,9 @@ test("setup registers v2 plugin domains then starts rate-limit listener", async 
         },
       },
     },
-    catalog: {
+    provider: {
       transform: async (handler: unknown) => {
-        order.push("catalog")
+        order.push("provider")
         registrations.push(handler)
       },
     },
@@ -110,10 +147,10 @@ test("setup registers v2 plugin domains then starts rate-limit listener", async 
 
     assert.deepEqual(order, [
       "integration",
-      "integration:active",
       "proactive:setInterval:300000",
       "proactive:unref",
-      "catalog",
+      "integration:active",
+      "provider",
       "session:context",
       "event:subscribe",
     ])
@@ -140,6 +177,7 @@ test("setup registers v2 plugin domains then starts rate-limit listener", async 
 test("setup reconciliation consumes the registered OAuth method with Promise semantics", async () => {
   const calls: string[] = []
   const expiresAt = Date.now() + 2 * 60 * 60_000
+  await writeTestClaudeCredentials(expiresAt)
   let registration:
     | {
         authorize: (inputs: Record<string, string>) => Promise<{
@@ -211,7 +249,7 @@ test("setup reconciliation consumes the registered OAuth method with Promise sem
           access: "legacy-access",
           refresh: "legacy-refresh",
           expires: 1,
-          metadata: { source: "Claude Code-credentials-deadbeef" },
+          metadata: { source: "file" },
         }),
       },
       oauth: {
@@ -239,7 +277,7 @@ test("setup reconciliation consumes the registered OAuth method with Promise sem
         },
       },
     },
-    catalog: {
+    provider: {
       transform: async () => {
         calls.push("catalog")
       },
@@ -318,7 +356,7 @@ test("setup cleans up proactive refresh when a later registration fails", async 
         },
       },
     },
-    catalog: {
+    provider: {
       transform: async () => {
         throw error
       },
@@ -397,7 +435,7 @@ test("setup preserves the original registration error when rollback cleanup thro
         },
       },
     },
-    catalog: {
+    provider: {
       transform: async () => {
         throw setupError
       },
@@ -463,7 +501,7 @@ test("normal teardown attempts every cleanup and reports cleanup failures", asyn
         },
       },
     },
-    catalog: {
+    provider: {
       transform: async () => {},
     },
     session: {

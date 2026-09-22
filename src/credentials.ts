@@ -25,7 +25,10 @@ export type RefreshOptions = {
   force?: boolean
   reloadSource?: boolean
   refreshThresholdMs?: number
+  sync?: CredentialSync
 }
+
+export type CredentialSync = (creds: ClaudeCredentials) => void
 
 const CREDENTIAL_CACHE_TTL_MS = 30_000
 export const PROACTIVE_REFRESH_INTERVAL_MS = 5 * 60_000
@@ -161,6 +164,20 @@ export function syncAuthJson(creds: ClaudeCredentials): void {
   }
 }
 
+function syncCredentialsSafely(
+  creds: ClaudeCredentials,
+  sync: CredentialSync | undefined,
+): void {
+  if (!sync) return
+  try {
+    sync(creds)
+  } catch (err) {
+    log("credential_sync_failed", {
+      error: err instanceof Error ? err.name : typeof err,
+    })
+  }
+}
+
 export const OAUTH_TOKEN_URL = "https://claude.ai/v1/oauth/token"
 export const OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 
@@ -178,6 +195,8 @@ export function parseOAuthResponse(
     access_token?: string
     refresh_token?: string
     expires_in?: number
+    // eslint-disable-next-line @typescript-eslint/naming-convention
+    expires_at?: number
     error?: string
   }
   try {
@@ -186,12 +205,24 @@ export function parseOAuthResponse(
     return null
   }
 
-  if (!data.access_token) return null
+  if (!data || typeof data.access_token !== "string" || !data.access_token)
+    return null
+
+  // Prefer an absolute `expires_at` (ms) when the endpoint provides one, but
+  // only if it is a future millisecond timestamp — a seconds-precision value
+  // would land in 1970 and read as already-expired, so fall back to the
+  // relative `expires_in` (or a conservative default) in that case.
+  const expiresAt =
+    typeof data.expires_at === "number" &&
+    Number.isFinite(data.expires_at) &&
+    data.expires_at > now
+      ? Math.trunc(data.expires_at)
+      : Math.trunc(now + (data.expires_in ?? 36_000) * 1000)
 
   return {
     accessToken: data.access_token,
     refreshToken: data.refresh_token ?? currentRefreshToken,
-    expiresAt: Math.trunc(now + (data.expires_in ?? 36_000) * 1000),
+    expiresAt,
   }
 }
 
@@ -223,7 +254,8 @@ export function refreshViaOAuth(
 
   try {
     log("refresh_started", { source: "oauth" })
-    const result = execFileSync(process.execPath, ["-e", script], {
+    // In OpenCode's compiled Bun host, execPath is the CLI, not a JS runtime.
+    const result = execFileSync("node", ["-e", script], {
       input: refreshToken,
       timeout: 15_000,
       encoding: "utf-8",
@@ -314,7 +346,10 @@ export function refreshIfNeeded(
 
   const creds = target.credentials
   const refreshThresholdMs = options.refreshThresholdMs ?? 60_000
-  if (!force && creds.expiresAt > Date.now() + refreshThresholdMs) return creds
+  if (!force && creds.expiresAt > Date.now() + refreshThresholdMs) {
+    syncCredentialsSafely(creds, options.sync)
+    return creds
+  }
 
   log("refresh_needed", {
     source: target.source,
@@ -336,6 +371,7 @@ export function refreshIfNeeded(
         return null
       }
       target.credentials = oauthCreds
+      syncCredentialsSafely(oauthCreds, options.sync)
       return oauthCreds
     }
   }
@@ -346,6 +382,7 @@ export function refreshIfNeeded(
   const refreshed = refreshAccount(target.source)
   if (refreshed && refreshed.expiresAt > Date.now() + 60_000) {
     target.credentials = refreshed
+    syncCredentialsSafely(refreshed, options.sync)
     return refreshed
   }
 
@@ -362,6 +399,7 @@ type ProactiveRefreshOptions = {
   clearInterval?: typeof clearInterval
   now?: () => number
   refresh?: (refreshToken: string) => ClaudeCredentials | null
+  sync?: CredentialSync
 }
 
 export function startProactiveRefresh(
@@ -379,7 +417,10 @@ export function startProactiveRefresh(
       if (!account) return
 
       const expiresIn = account.credentials.expiresAt - now()
-      if (expiresIn >= PROACTIVE_REFRESH_THRESHOLD_MS) return
+      if (expiresIn >= PROACTIVE_REFRESH_THRESHOLD_MS) {
+        syncCredentialsSafely(account.credentials, options.sync)
+        return
+      }
 
       let refreshed: ClaudeCredentials | null = null
       if (options.refresh && account.credentials.refreshToken) {
@@ -395,12 +436,14 @@ export function startProactiveRefresh(
           } else {
             account.credentials = forced
             refreshed = forced
+            syncCredentialsSafely(forced, options.sync)
           }
         }
       } else {
         refreshed = refreshIfNeeded(account, {
           reloadSource: true,
           refreshThresholdMs: PROACTIVE_REFRESH_THRESHOLD_MS,
+          sync: options.sync,
         })
       }
 
@@ -464,7 +507,9 @@ export function invalidateCredentialCache(): void {
   log("cache_invalidated", { source: account.source })
 }
 
-export function reloadPrimaryCredentials(): ClaudeCredentials | null {
+export function reloadPrimaryCredentials(
+  sync: CredentialSync = syncAuthJson,
+): ClaudeCredentials | null {
   const account = getActiveAccount()
   if (!account) return null
   try {
@@ -472,6 +517,7 @@ export function reloadPrimaryCredentials(): ClaudeCredentials | null {
     if (!fresh) return null
     account.credentials = fresh
     accountCacheMap.set(account.source, { creds: fresh, cachedAt: Date.now() })
+    syncCredentialsSafely(fresh, sync)
     return fresh
   } catch (err) {
     log("primary_reload_failed", {
@@ -484,6 +530,7 @@ export function reloadPrimaryCredentials(): ClaudeCredentials | null {
 
 export function forceRefreshPrimaryCredentials(
   refresh: (refreshToken: string) => ClaudeCredentials | null = refreshViaOAuth,
+  sync: CredentialSync = syncAuthJson,
 ): ClaudeCredentials | null {
   const account = getActiveAccount()
   if (!account?.credentials.refreshToken) return null
@@ -522,6 +569,7 @@ export function forceRefreshPrimaryCredentials(
     creds: oauthCreds,
     cachedAt: Date.now(),
   })
+  syncCredentialsSafely(oauthCreds, sync)
   return oauthCreds
 }
 

@@ -8,6 +8,122 @@ import {
 } from "./transforms.ts"
 
 describe("transforms", () => {
+  it("omits unsigned thinking from switched-model history while preserving signed blocks and tool pairs", () => {
+    const signed = {
+      type: "thinking",
+      thinking: "",
+      signature: "opaque-signature",
+    }
+    const redacted = { type: "redacted_thinking", data: "opaque-redacted-data" }
+    const tool = { type: "tool_use", id: "toolu_read", name: "read", input: {} }
+    const result = {
+      type: "tool_result",
+      tool_use_id: "toolu_read",
+      content: "ok",
+    }
+    const output = JSON.parse(
+      transformBody(
+        JSON.stringify({
+          model: "claude-fable-5-1",
+          thinking: { type: "adaptive" },
+          messages: [
+            { role: "user", content: "Continue after switching providers." },
+            {
+              role: "assistant",
+              content: [
+                { type: "thinking", thinking: "Prior provider reasoning" },
+                { type: "thinking", thinking: "", signature: "" },
+                {
+                  type: "thinking",
+                  thinking: "Invalid metadata",
+                  signature: null,
+                },
+                {
+                  type: "thinking",
+                  thinking: "Invalid metadata",
+                  signature: 123,
+                },
+                { type: "text", text: "Previous answer" },
+                signed,
+                redacted,
+                tool,
+              ],
+            },
+            { role: "user", content: [result] },
+          ],
+        }),
+      ) as string,
+    )
+
+    assert.deepEqual(output.messages, [
+      { role: "user", content: "Continue after switching providers." },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Previous answer" },
+          signed,
+          redacted,
+          { ...tool, name: "mcp_Read" },
+        ],
+      },
+      { role: "user", content: [result] },
+    ])
+    assert.deepEqual(output.thinking, { type: "adaptive" })
+  })
+
+  it("drops unsigned-only turns and preserves repaired tool pairs after a model switch", () => {
+    const output = JSON.parse(
+      transformBody(
+        JSON.stringify({
+          messages: [
+            { role: "user", content: "Hello" },
+            {
+              role: "assistant",
+              content: [{ type: "thinking", thinking: "" }],
+            },
+            { role: "user", content: "Continue" },
+            {
+              role: "assistant",
+              content: [
+                { type: "thinking", thinking: "Other provider" },
+                {
+                  type: "tool_use",
+                  id: "toolu_orphan",
+                  name: "read",
+                  input: {},
+                },
+              ],
+            },
+            { role: "user", content: "Never mind" },
+          ],
+        }),
+      ) as string,
+    )
+    assert.deepEqual(output.messages, [
+      { role: "user", content: "Hello" },
+      { role: "user", content: "Continue" },
+      {
+        role: "assistant",
+        content: [
+          { type: "tool_use", id: "toolu_orphan", name: "mcp_Read", input: {} },
+        ],
+      },
+      {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "toolu_orphan",
+            content:
+              "Tool result unavailable (removed during context compaction).",
+            is_error: true,
+          },
+          { type: "text", text: "Never mind" },
+        ],
+      },
+    ])
+  })
+
   it("transformBody moves non-core system text to user message and PascalCase-prefixes tool names", () => {
     const input = JSON.stringify({
       system: [{ type: "text", text: "OpenCode and opencode" }],
@@ -405,6 +521,62 @@ describe("transforms", () => {
       { type: "enabled" },
       "thinking without effort should pass through unchanged",
     )
+  })
+
+  it("transformBody caps budget_tokens when equal to max_tokens", () => {
+    const input = JSON.stringify({
+      model: "claude-opus-5",
+      max_tokens: 32000,
+      thinking: { type: "enabled", budget_tokens: 32000 },
+      messages: [{ role: "user", content: "test" }],
+    })
+
+    const output = transformBody(input)
+    const parsed = JSON.parse(output as string) as {
+      max_tokens: number
+      thinking: { type: string; budget_tokens: number }
+    }
+
+    assert.equal(parsed.max_tokens, 32000)
+    assert.equal(parsed.thinking.budget_tokens, 25600)
+    assert.ok(parsed.max_tokens > parsed.thinking.budget_tokens)
+  })
+
+  it("transformBody caps budget_tokens when greater than max_tokens", () => {
+    const input = JSON.stringify({
+      model: "claude-opus-5",
+      max_tokens: 32000,
+      thinking: { type: "enabled", budget_tokens: 50000 },
+      messages: [{ role: "user", content: "test" }],
+    })
+
+    const output = transformBody(input)
+    const parsed = JSON.parse(output as string) as {
+      max_tokens: number
+      thinking: { type: string; budget_tokens: number }
+    }
+
+    assert.equal(parsed.max_tokens, 32000)
+    assert.equal(parsed.thinking.budget_tokens, 25600)
+    assert.ok(parsed.max_tokens > parsed.thinking.budget_tokens)
+  })
+
+  it("transformBody preserves budget_tokens below max_tokens", () => {
+    const input = JSON.stringify({
+      model: "claude-opus-5",
+      max_tokens: 32000,
+      thinking: { type: "enabled", budget_tokens: 24000 },
+      messages: [{ role: "user", content: "test" }],
+    })
+
+    const output = transformBody(input)
+    const parsed = JSON.parse(output as string) as {
+      max_tokens: number
+      thinking: { type: string; budget_tokens: number }
+    }
+
+    assert.equal(parsed.max_tokens, 32000)
+    assert.equal(parsed.thinking.budget_tokens, 24000)
   })
 
   it("transformBody preserves effort for non-haiku models", () => {
@@ -920,7 +1092,7 @@ describe("transforms", () => {
     })
   })
 
-  it("transformBody removes orphaned tool_use blocks from messages", () => {
+  it("transformBody in drop mode removes orphaned tool_use blocks from messages", () => {
     const input = JSON.stringify({
       system: [{ type: "text", text: "prompt" }],
       messages: [
@@ -932,7 +1104,7 @@ describe("transforms", () => {
       ],
     })
 
-    const output = transformBody(input)
+    const output = transformBody(input, "drop")
     const parsed = JSON.parse(output as string) as {
       messages: Array<{ role: string; content: unknown }>
     }

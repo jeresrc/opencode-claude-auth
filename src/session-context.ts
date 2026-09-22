@@ -1,4 +1,4 @@
-import type { SystemPart as SystemPartType } from "@opencode-ai/ai"
+import type { SystemPart as SystemPartType } from "@opencode/ai"
 
 const ANTHROPIC_PROVIDER_ID = "anthropic"
 
