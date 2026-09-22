@@ -31,6 +31,8 @@ Starting September 12, 2026 at 06:00 America/Argentina/Buenos_Aires, the daily c
    When invoking through Python, use `stdin=subprocess.DEVNULL`; inherited
    script input can be appended to the prompt by the CLI.
 
+9. After a CLI migration or a report of missing history, verify session visibility, not just database row preservation. Resolve each affected project with `opencode2 api get /api/location -H 'x-opencode-directory:/absolute/project/path'`, compare its `project.id` with saved `session_v2.project_id`, and run `opencode2 session list` from the affected directory. Require historical root sessions to appear and their messages to load. A mismatch that hides history is an incident even when all original database IDs remain present.
+
 ## Incident classification
 
 Report `INCIDENT` when any required command fails, the API is unhealthy, any plugin has failed, an explicit plugin is not active, a local plugin path is missing, Claude Code is logged out, credential metadata is empty/expired/invalid, or any model smoke test fails. Distinguish detected pre-repair incidents from the verified final status.
@@ -80,3 +82,10 @@ Return concise English with:
 - Old beta TUI processes cannot talk to the new service (`/api/health` vs `/api/info`) and can repeatedly try to spawn obsolete daemons. Four idle beta TUIs were terminated with no active sessions. Reopen saved conversations with the `opencode2` launcher.
 - Private rollback material (source/config snapshots and consistent SQLite backup) is at `/Users/jeresrc/.local/share/opencode2-migration/2026-09-22`. Never overwrite a newer live database with this backup: preserve subsequent sessions and stop the service before any coordinated rollback. Current session data was migrated in place without deleting conversations.
 - Validate Orca using both `bun .../tests/orca_adapter_test.mjs` and the same command with `--modern`. Launcher tests now target the current package location.
+
+## September 22 session visibility repair
+
+- The initial migration verification preserved every session/message ID but missed project-filter visibility. Sandia had 243 sessions (7 roots) under an older project ID, while its current resolver selected another ID for the same canonical repository. SBD had the same issue for 144 sessions (27 roots). The mismatch already existed in the pre-migration backup; the new client's project-scoped list exposed it.
+- Reconciled only `session_v2.project_id` for those two proven same-canonical-project mappings in one SQLite transaction. Preserved session IDs, directories, parent links, messages, timestamps, models and every other row field. No project deletion, backup restore, service restart, or active-session interruption. Checked that no affected session was running before applying. Private exact rollback rows and audit are in the migration backup directory as `session-project-repair-before.json` and `session-visibility-audit.json`.
+- Sandia now lists all 8 root conversations from Shipworm, including `ses_f5a613c73ffeIODXRw6YZT2cUC` (Configurar personal/main como único origin activo), whose 1,187 messages load in the real TUI. Existing child sessions remain attached. Other live projects were audited; only those two stale project identities required repair.
+- Do not merge projects based only on similar names. Prove the resolver's canonical repository matches the stored project worktree, preserve a per-row rollback journal, and avoid affected running sessions. The session move API returns early for an unchanged directory, so it does not repair this identity mismatch. Treat this as a targeted projection repair, not permission to restore an old database over new work.
