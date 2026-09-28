@@ -206,6 +206,49 @@ export function __setCredentials(c) {
   }
 }
 
+describe("provider credential recovery without plugin setup", () => {
+  it("reloads the primary source and retries a stale bearer in a fresh module", async () => {
+    const { credentialsModule, keychainModule } =
+      await loadCredentialsWithCountingKeychain(Date.now() + 3_600_000)
+    const fresh = {
+      accessToken: "externally-rotated-token",
+      refreshToken: "externally-rotated-refresh",
+      expiresAt: Date.now() + 3_600_000,
+    }
+    keychainModule.__setCredentials(fresh)
+    const sent: Array<string | null> = []
+    const synced: Creds[] = []
+    const request = createClaudeFetch({
+      accessToken: "stale-integration-token",
+      upstream: (async (_input, init) => {
+        const auth = new Headers(init?.headers).get("authorization")
+        sent.push(auth)
+        return new Response("", {
+          status: auth === "Bearer externally-rotated-token" ? 200 : 401,
+        }) as Response
+      }) as typeof fetch,
+      authRecovery: {
+        reload: () =>
+          credentialsModule.reloadPrimaryCredentials((c) => synced.push(c)),
+        refresh: () => {
+          throw new Error("Existing primary credentials must be reused")
+        },
+      },
+    })
+    const response = await request("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      body: JSON.stringify({ model: "claude-opus-5-5", messages: [] }),
+    })
+    assert.equal(response.status, 200)
+    assert.deepEqual(sent, [
+      "Bearer stale-integration-token",
+      "Bearer externally-rotated-token",
+    ])
+    assert.deepEqual(synced, [fresh])
+    assert.equal(keychainModule.__getWriteCount(), 0)
+  })
+})
+
 describe("credential caching", () => {
   it("getCachedCredentials reuses cached credentials within 30 second TTL", async () => {
     const originalNow = Date.now

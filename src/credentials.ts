@@ -510,9 +510,12 @@ export function invalidateCredentialCache(): void {
 export function reloadPrimaryCredentials(
   sync: CredentialSync = syncAuthJson,
 ): ClaudeCredentials | null {
-  const account = getActiveAccount()
-  if (!account) return null
+  let account: ClaudeAccount | null = null
   try {
+    // Providers can load in a separate module scope from plugin setup.
+    // Recover from the primary source even when that scope has no account yet.
+    account = getActiveAccount() ?? refreshAccountsList()[0] ?? null
+    if (!account) return null
     const fresh = refreshAccount(account.source)
     if (!fresh) return null
     account.credentials = fresh
@@ -521,7 +524,7 @@ export function reloadPrimaryCredentials(
     return fresh
   } catch (err) {
     log("primary_reload_failed", {
-      source: account.source,
+      source: account?.source ?? "primary",
       error: err instanceof Error ? err.name : "unknown",
     })
     return null
