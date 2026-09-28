@@ -28,6 +28,9 @@ export const config: ModelConfig = {
     "interleaved-thinking-2025-05-14",
   ],
   modelOverrides: {
+    "sonnet-5-5": {
+      add: ["effort-2025-11-24"],
+    },
     sonnet: {
       exclude: ["effort-2025-11-24"],
       disableEffort: true,

@@ -643,6 +643,20 @@ describe("transforms", () => {
     assert.deepEqual(parsed.thinking, { type: "adaptive", display: "omitted" })
   })
 
+  it("transformBody preserves Sonnet 5.5 medium effort and adaptive thinking", () => {
+    const output = transformBody(
+      JSON.stringify({
+        model: "claude-sonnet-5-5",
+        output_config: { effort: "medium" },
+        thinking: { type: "adaptive", display: "omitted" },
+        messages: [{ role: "user", content: "test" }],
+      }),
+    )
+    const parsed = JSON.parse(output as string)
+    assert.equal(parsed.output_config.effort, "medium")
+    assert.deepEqual(parsed.thinking, { type: "adaptive", display: "omitted" })
+  })
+
   it("transformBody handles haiku without effort-related fields", () => {
     const input = JSON.stringify({
       model: "claude-haiku-4-5",

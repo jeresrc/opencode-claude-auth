@@ -88,6 +88,15 @@ describe("betas", () => {
     assert.ok(betas.includes("effort-2025-11-24"))
   })
 
+  it("Sonnet 5.5 uses effort before the legacy Sonnet exclusion", () => {
+    assert.ok(getModelBetas("claude-sonnet-5-5").includes("effort-2025-11-24"))
+    assert.equal(
+      getModelOverride("claude-sonnet-5-5")?.disableEffort,
+      undefined,
+    )
+    assert.equal(getModelExcludedBetas("claude-sonnet-5-5").size, 0)
+  })
+
   it("getModelExcludedBetas exposes model override exclusions", () => {
     assert.ok(
       getModelExcludedBetas("claude-sonnet-4-6").has("effort-2025-11-24"),

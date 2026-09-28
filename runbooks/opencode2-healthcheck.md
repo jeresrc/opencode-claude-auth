@@ -2,7 +2,7 @@
 
 ## Scope
 
-This runbook is specifically for `/Users/jeresrc/.bun/bin/opencode2`, the current OpenCode 2 release from `@opencode/cli`, channel `latest`. Do not substitute the stable `opencode` binary.
+This runbook is specifically for `/Users/jeresrc/.bun/bin/opencode2`, the current OpenCode 2 release from `@opencode/cli`, channel `latest`. Use this canonical entrypoint for health checks. Since September 27, 2026, `opencode` and `oc` also resolve to this same OpenCode 2 launcher; no V1 command remains installed.
 
 Starting September 12, 2026 at 06:00 America/Argentina/Buenos_Aires, the daily check is authorized to diagnose and repair local bugs after collecting the required diagnostics. Targeted, reversible source/configuration edits, local plugin builds, and necessary opencode2 service restarts are allowed. Preserve unrelated changes and user sessions/data. Do not authenticate accounts, reveal or manually replace credentials, perform broad software upgrades, or install/remove unrelated plugins. Report account-login or external-service blockers. After repairs, repeat service/API/plugin checks and all three exact model tests; determine final status from the verified state, requiring zero failed plugins.
 
@@ -10,7 +10,7 @@ Starting September 12, 2026 at 06:00 America/Argentina/Buenos_Aires, the daily c
 
 1. Confirm the `opencode2` binary exists and record its version.
 2. Run `opencode2 service status`.
-3. On `@opencode/cli` 2.0.14, query `opencode2 api get /api/info`; require exit 0, the same version as the CLI, and a positive running PID. `/api/health` was removed and returns 404. Only legacy beta versions use `/api/health` and `healthy: true`.
+3. On current `@opencode/cli` 2.x (2.0.18 as of September 27), query `opencode2 api get /api/info`; require exit 0, the same version as the CLI, and a positive running PID. `/api/health` was removed and returns 404. Only legacy beta versions use `/api/health` and `healthy: true`.
 4. Query `opencode2 api get /api/plugin` and compare it with the explicit plugins in `/Users/jeresrc/.config/opencode/opencode.json`. Parse this file as JSONC and accept both `plugin` and `plugins`. For configured local directories, compare the active source with their resolved `index.js` or `index.ts`, rather than requiring the directory string to equal the API's source file.
 5. Require plugin ID `opencode-claude-auth` to be active. Its current entrypoint is `/Users/jeresrc/.config/opencode/plugins/claude-auth/index.js`, which re-exports `/Users/jeresrc/dev/lab/opencode-claude-auth/opencode-claude-auth.js`. Require both files and the underlying build output to exist; inspect the re-export to verify the original implementation is still used.
 6. Run `claude auth status` and require `loggedIn: true` with a non-`none` authentication method.
@@ -67,7 +67,7 @@ Return concise English with:
 - `opencode2` version and service/API health.
 - Active and failed plugin counts.
 - Claude login and credential-metadata health.
-- Fable smoke-test result.
+- Opus 5.5 high, Fable 5.1, and Fable 5 smoke-test results.
 - Version change and likely post-update regression when prior-run context is available.
 - For each issue: component, path/source, summarized error, and recommended next action.
 
@@ -89,3 +89,64 @@ Return concise English with:
 - Reconciled only `session_v2.project_id` for those two proven same-canonical-project mappings in one SQLite transaction. Preserved session IDs, directories, parent links, messages, timestamps, models and every other row field. No project deletion, backup restore, service restart, or active-session interruption. Checked that no affected session was running before applying. Private exact rollback rows and audit are in the migration backup directory as `session-project-repair-before.json` and `session-visibility-audit.json`.
 - Sandia now lists all 8 root conversations from Shipworm, including `ses_f5a613c73ffeIODXRw6YZT2cUC` (Configurar personal/main como único origin activo), whose 1,187 messages load in the real TUI. Existing child sessions remain attached. Other live projects were audited; only those two stale project identities required repair.
 - Do not merge projects based only on similar names. Prove the resolver's canonical repository matches the stored project worktree, preserve a per-row rollback journal, and avoid affected running sessions. The session move API returns early for an unchanged directory, so it does not repair this identity mismatch. Treat this as a targeted projection repair, not permission to restore an old database over new work.
+
+
+## Orca verification scope (September 24, 2026)
+
+- The September 12 redundant-discovery repair remains valid: require the explicitly configured adapter active and zero failed plugins. Both legacy and modern adapter tests verify event handling with synthetic hook coordinates; they do not verify actual Orca pane delivery.
+- On September 23, the shared daemon lacked Orca hook coordinates, so an active adapter could silently deliver no status. On September 24, the replacement daemon had non-empty hook port/token, pane key, and endpoint variables (presence inspected without exposing values). This removes the observed missing-environment condition but does not establish correct routing across live panes.
+- Keep per-pane busy/idle/attention delivery explicitly unverified until exercised end to end. Do not repair routing by assigning one terminal's pane identity globally to the shared daemon. Successful service/plugin/model checks establish inference health, not complete Orca UI integration.
+
+
+## September 25 bearer recovery and Orca duplicate IDs
+
+- A later September 25 incident reproduced `Invalid bearer token` on all three models although Claude remained logged in and both stores had future expiries. The primary Keychain credential had rotated while OpenCode retained an older credential. Future expiry alone does not prove server acceptance.
+- `reloadPrimaryCredentials` now reads and seeds the primary account when invoked in a provider module scope that has not run plugin setup. Previously it returned null before reading Keychain, preventing the existing single-retry 401 recovery. A regression test covers a fresh module, a stale integration bearer, successful reload/retry, and zero Keychain writes. Rebuild and restart when needed; do not manually copy credentials.
+- Orca 1.4.210 generated both `plugins/orca-opencode-status.js` and `plugins/orca-opencode2-status.js` with ID `orca-opencode-status`. The opencode2 copy failed duplicate-ID validation. Its default ID was corrected to `orca-opencode2-status`, retaining its `/hook/opencode2` endpoint, agent guard and setup function. The explicit compat adapter remains active. Final inventory after this repair: 93 active, zero failed.
+- The installed Orca generator in app.asar still hardcodes the common ID; regeneration may restore the collision. Check both generated copies after Orca changes and preserve distinct IDs. The app bundle was not modified. Backup of the affected generated file and compiled credential module: `/Users/jeresrc/.codex/automations/salud-diaria-de-opencode2/repair-2026-09-25/`.
+- Run the repository test script (`bun run test`, which uses Node), not Bun's native test runner. Provider tests can invoke a build; run broad verification in an isolated source/dist copy when user sessions are active to avoid rebuilding hot-loaded modules.
+
+
+## September 27, 2026 V1 retirement
+
+- The user authorized retiring OpenCode V1 across this Mac. `/Users/jeresrc/.bun/bin/opencode` and `/Users/jeresrc/.bun/bin/oc` now link to `opencode2`, which retains the Orca-safe launcher and the separate `@opencode/cli` runtime. The interactive zsh alias `oc` explicitly selects `opencode2`; old shells with `oc=opencode` also reach V2 through the replaced executable link.
+- Removed global `opencode-ai@1.18.18` and obsolete `@opencode-ai/cli@0.0.0-beta-19242` using Bun, including their global manifest/lock entries. Archived the unused platform binary packages. Other installed package versions are unchanged. Do not reinstall these packages or restore their historical executable links during routine checks.
+- The active Orca profile already has `settings.agentCmdOverrides.opencode = "opencode2"`. Keep the `opencode` agent identity and historical session metadata; that identity now invokes V2 and does not imply a V1 executable.
+- Rollback material is at `/Users/jeresrc/.local/share/opencode2-migration/2026-09-27-command-aliases/`: original package manifest/lock, command-link map, shell aliases and retired packages. No session database or credentials were changed.
+- Future health checks should also verify that `opencode`, `oc` and `opencode2` resolve to the same launcher, including interactive zsh and executable PATH lookup.
+- During command retirement, the pre-existing desktop-managed service reported 2.0.18 while the dedicated CLI was still 2.0.14. The user explicitly authorized alignment, so the dedicated runtime was upgraded to exact `@opencode/cli@2.0.18` in isolated staging, its unchanged postinstall inspected/executed, then installed at the preserved runtime path. Desktop service and all three commands now match 2.0.18. No service restart or session interruption was required; the existing desktop service PID remained unchanged. The prior runtime is backed up alongside the retirement material. This targeted authorization does not permit unrelated unattended upgrades.
+- Orca regenerated the duplicate default ID in `~/.config/opencode/plugins/orca-opencode2-status.js`. Corrected it again to `orca-opencode2-status`; the live service reloaded it automatically and reached 95 active / zero failed plugins without restart. The generator recurrence risk documented above remains.
+
+- Claude fork dependencies remain pinned to `@opencode/ai` / `@opencode/plugin` 2.0.14 and Effect 4.0.0-rc.112; reviewed the existing boundary compatibility and preserved these working pins. Superpowers 6.4.1 is unchanged. Verify actual plugin loading and all three model tests before changing SDK pins solely to match CLI version numbers.
+- Bun global `node_modules/.bin/opencode`, `opencode2` and `oc` also forward to the canonical commands; package removal had left stale internal links, which were corrected.
+
+
+## Desktop authentication over Tailscale (September 27, 2026)
+
+- User reported `auth failed` in Desktop (corrected initial wording of migration failed). Desktop/CLI/service already match 2.0.18. Actual V1 migration endpoint `/api/experimental/migration/v1` reports `completed`.
+- Confirmed upstream/shipped Desktop `windows/security.ts` only attaches the sidecar Basic credential to `http://127.0.0.1/*` and `http://localhost/*`. A configured service hostname of `100.78.113.69` is adopted unchanged, so Desktop renderer requests omit auth and return401; the existing service credential succeeds with200. CLI inference success does not establish Desktop connectivity.
+- Mac Tailscale is Running/Online, health reports no errors, and a ping to msi-server succeeds. The user requires preserving Tailscale access. Do not disconnect/log out/reset Tailscale or weaken server authentication.
+- Final user preference: Desktop connects only to the local server; Mac Tailscale connectivity must remain active. Service hostname is now `127.0.0.1`, with no Tailscale Serve/Funnel forwarding. Do not reintroduce the earlier proposed forwarding plan. Tailscale itself remains Running/Online with no health errors. Existing service password is unchanged; unauthenticated localhost requests return401 and authenticated requests200.
+- Applied after the user explicitly authorized restarting despite the active deployment and resuming it afterward. Backed up `service.json` privately, changed only hostname, restarted once, verified2.0.18 PID47645 on127.0.0.1:49374. Desktop automatically reconnected and displayed project/session history. Resumed the existing child session `ses_f1a6bf755ffeuLOBL173iYIbis` (Release offline-first stack to prod), preserving its parent and worktree, with one prompt to inspect actual deployment state before repeating steps. Prompt consumed; session running. Do not send duplicate resume prompts. Artifacts and private config backup: `/Users/jeresrc/.local/share/opencode2-migration/2026-09-27-desktop-auth/`.
+- Desktop2.0.18 includes Settings > Local Server > Worktrees with inventory, disk management, linked sessions and deletion safeguards. Its current Loading state is caused by the auth incident. Backend capability/UI source confirmed; actual worktree listing must be verified after connection repair.
+
+- Post-repair verification:95active/0failed plugins; all three exact model smoke tests pass. Desktop sidebar enabled via Preferences > Tabs > Vertical and verified visually. This sidebar lists open sessions; Home provides project/session discovery. No Desktop application-bundle or credential modification.
+
+
+## Mandatory diagnostic-session cleanup (September 27, 2026)
+
+The user explicitly authorized deleting OpenCode health-check sessions after every check. This exception applies only to disposable diagnostic sessions, never user work or the Codex automation task.
+
+- Capture and persist every session ID created by initial model probes, retries, repair diagnostics and post-repair verification, including failures and untitled sessions. Use structured output and a small per-run cleanup ledger. If no ID is emitted, reconcile the command time window, run directory and exact diagnostic prompt; do not match broad words such as "health" or "smoke" in titles.
+- Save sanitized results and failure evidence in automation memory/artifacts first. Then, in a finally-style step on both OK and INCIDENT outcomes, delete all sessions owned by that run with `/Users/jeresrc/.bun/bin/opencode2 session delete <sessionID>` or the supported session API. Stop a running diagnostic only when its ownership by the check is proven.
+- Verify that every recorded ID is absent from the service. Retry briefly and report remaining IDs as a cleanup incident. Carry safely identified leftovers in the ledger into the next run. Never write directly to the session database or delete unrelated descendants.
+- Keeping the diagnostic results in automation records is sufficient; do not retain OpenCode test conversations as the evidence store.
+
+
+## Sonnet 5.5 and fork maintenance (September 28, 2026)
+
+- A reported `ModelUnavailableError: anthropic/claude-sonnet-5-5` reproduced only in the existing `misty-comet` worktree. The same model worked in a fresh location. Supported `opencode2 reload` refreshed location catalogs and made the affected worktree succeed without restarting the service. Always test the failing location; the global model list alone is insufficient evidence.
+- The Claude Auth fork now gives `sonnet-5-5` a specific effort-compatible rule before the legacy Sonnet exclusion, preserving requested medium effort and adaptive thinking. The protocol version remains 2.1.280; this incident did not require changing it or upgrading packages.
+- Include `anthropic/claude-sonnet-5-5#medium` with the exact prompt `Reply with only SONNET_5_5_HEALTH_OK.` in future model checks and diagnostic cleanup. Require exit zero and the exact response.
+- The user's standing preference is to maintain the installed local `opencode-claude-auth` and publish tested fixes to `jeresrc/opencode-claude-auth:v2`, considering upstream changes. Before plugin maintenance, fetch both remotes and review the delta from the latest upstream audit. Record incorporated, already-equivalent and deferred changes. Preserve V2 SDK compatibility and existing fork fixes; do not blindly merge upstream V1 code or upgrade unrelated packages.
+- See `AGENTS.md` and `upstream-sync-2026-09-28.md` for the durable workflow and upstream 2.2.1 audit.
