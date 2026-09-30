@@ -631,3 +631,46 @@ assert.ok(prepared.request.headers["anthropic-beta"].includes("thinking-binding-
 assert.equal(foreignRequest.model, foreignModel)
 `)
 })
+
+test("host 2.0.18 media assets lower through the pinned Anthropic protocol without mutating history", async () => {
+  await runBun(String.raw`
+${commonImports}
+const selected = model("claude-opus-5-5", { apiKey: "access-token" })
+const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j4ioAAAAASUVORK5CYII="
+const parts = [
+  { type: "media", media: { mediaType: "image/png", source: { type: "base64", mediaType: "image/png", data: png } } },
+  { type: "media", media: { mediaType: "image/png", source: { type: "bytes", mediaType: "image/png", data: Buffer.from(png, "base64") } } },
+  { type: "media", media: { mediaType: "application/pdf", source: { type: "url", mediaType: "application/pdf", url: "https://example.test/document.pdf" } }, filename: "document.pdf" },
+  { type: "media", media: { mediaType: "text/plain", source: { type: "base64", mediaType: "text/plain", data: Buffer.from("document text").toString("base64") } } },
+  { type: "media", mediaType: "image/png", data: png },
+]
+const before = structuredClone(parts)
+const request = { ...LLM.request({ model: selected, prompt: "inspect attachments" }), messages: [{ role: "user", content: parts }] }
+const body = await Effect.runPromise(selected.route.body.from(request))
+const blocks = body.messages[0].content
+assert.equal(blocks.length, 5)
+for (const index of [0, 1, 4]) {
+  assert.deepEqual(blocks[index].source, { type: "base64", media_type: "image/png", data: png })
+}
+assert.deepEqual(blocks[2].source, { type: "url", url: "https://example.test/document.pdf" })
+assert.equal(blocks[2].title, "document.pdf")
+assert.deepEqual(blocks[3].source, { type: "text", media_type: "text/plain", data: "document text" })
+assert.deepEqual(structuredClone(parts), before)
+`)
+})
+
+test("host media references retain Anthropic metadata and reject unsupported authenticated URLs", async () => {
+  await runBun(String.raw`
+${commonImports}
+const selected = model("claude-opus-5-5", { apiKey: "access-token" })
+const lower = (media) => selected.route.body.from({
+  ...LLM.request({ model: selected, prompt: "inspect" }),
+  messages: [{ role: "user", content: [{ type: "media", media, metadata: { anthropic: { title: "Retained title" } } }] }],
+})
+const body = await Effect.runPromise(lower({ mediaType: "application/pdf", source: { type: "ref", provider: "anthropic", id: "file_123" } }))
+assert.deepEqual(body.messages[0].content[0].source, { type: "file", file_id: "file_123" })
+assert.equal(body.messages[0].content[0].title, "Retained title")
+await assert.rejects(Effect.runPromise(lower({ mediaType: "image/png", source: { type: "ref", provider: "openai", id: "file_other" } })), /another provider/)
+await assert.rejects(Effect.runPromise(lower({ mediaType: "image/png", source: { type: "url", url: "https://example.test/private.png" }, headers: { authorization: "test-value" } })), /authenticated media URLs/)
+`)
+})

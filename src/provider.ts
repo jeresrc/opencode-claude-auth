@@ -11,6 +11,7 @@ import type {
 import { Effect, Layer } from "effect"
 import { FetchHttpClient } from "effect/unstable/http"
 import { createClaudeFetch } from "./claude-fetch.ts"
+import { normalizeHostMedia } from "./media-compat.ts"
 import {
   forceRefreshPrimaryCredentials,
   reloadPrimaryCredentials,
@@ -205,7 +206,25 @@ export const model = ((modelID: string, settings: Settings): LanguageModel => {
     id: AnthropicMessages.route.id,
     provider: "anthropic",
     providerMetadataKey: AnthropicMessages.route.providerMetadataKey,
-    protocol: withTerminalFinishReasonFallback(AnthropicMessages.protocol),
+    protocol: withTerminalFinishReasonFallback({
+      ...AnthropicMessages.protocol,
+      body: {
+        ...AnthropicMessages.protocol.body,
+        from: (request) =>
+          Effect.try({
+            try: () => normalizeHostMedia(request),
+            catch: (cause) =>
+              new runtime.ai.AIError({
+                reason: new runtime.ai.InvalidRequestError({
+                  message:
+                    cause instanceof Error
+                      ? cause.message
+                      : "Unsupported host media asset",
+                }),
+              }),
+          }).pipe(Effect.flatMap(AnthropicMessages.protocol.body.from)),
+      },
+    }),
     endpoint: Endpoint.path(AnthropicMessages.PATH, {
       baseURL: settings.baseURL ?? AnthropicMessages.DEFAULT_BASE_URL,
     }),
