@@ -40,7 +40,7 @@ Report `INCIDENT` when any required command fails, the API is unhealthy, any plu
 Classify authentication failures separately from transient upstream failures:
 
 - `Invalid bearer token` or HTTP 401: authentication incident.
-- `Third-party apps now draw from your extra usage`: provider-side access/billing rejection, even when the subscription works through the official Claude Code CLI. Do not confuse it with expired OAuth, enable extra usage automatically, or treat a successful `cswap`/Claude Code probe as a successful OpenCode model test. Preserve the user's native plugin; check upstream for a compatible documented repair.
+- `Third-party apps now draw from your extra usage`: rejected request; first verify that the private Claude fetch actually executes under the host fetch context. On October 8, a local transport bypass produced this message with valid credentials and was repaired without changing billing settings. The message alone does not prove a subscription restriction. Do not enable extra usage automatically or treat a successful `cswap`/Claude Code probe as a successful OpenCode model test.
 - HTTP 429 or 529: rate-limit/overload incident.
 - HTTP 502, 503, or 504 after retries: transient gateway incident.
 - An Opus 5.5 rejection requiring Claude Code 2.1.280 or newer, or Fable 5.1 requiring 2.1.251 or newer: custom-plugin version compatibility regression.
@@ -160,3 +160,10 @@ The user explicitly authorized deleting OpenCode health-check sessions after eve
 - Supported reload did not evict the imported provider module during this repair. After an empty active-session check, one service restart loaded the verified build; attached-image Opus and all four standard model probes passed. Preserve working SDK/Effect pins.
 - A concurrent child hang used `await new Promise(r=>r)` inside `execute`; returning the resolver from a Promise executor does not settle it. Interrupt the proven stuck session through `/api/session/{id}/interrupt?resume=false`, then resume that existing session with instructions to inspect current state and use bounded waits. Do not duplicate the task or repeat already completed external actions blindly.
 - Audit: `upstream-sync-2026-09-29.md`. Sanitized evidence, build backup and cleanup ledgers: `/Users/jeresrc/.codex/automations/salud-diaria-de-opencode2/opus-repair-2026-09-29/`.
+
+
+## October 8, 2026 host fetch context repair
+
+- OpenCode 2.0.25 supplies a host `FetchHttpClient.Fetch` reference. Effect merges that execution context into its HTTP client, so providing a private fetch only while constructing the executor lets the host fetch bypass `createClaudeFetch`, including its existing auth, request transforms and recovery. Bind the same private fetch with `Effect.provideService` around transport execution too. Preserve host HTTP middleware and the pinned SDK/Effect versions.
+- The provider regression test supplies an outer host fetch and requires zero host calls, one private call, OAuth headers, transformed system content and one successful host middleware invocation. Keep this coverage when changing the executor.
+- All four model probes, real file-read/shell execution and an attached synthetic image passed after this repair. The earlier provider-side restriction diagnosis was superseded by the reproduced local context bug. CLIProxyAPI and upstream issue 292 were reviewed as references; the installed implementation remains the native plugin.

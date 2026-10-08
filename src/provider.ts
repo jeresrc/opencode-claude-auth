@@ -61,30 +61,29 @@ function executorLayer(accessToken: string, upstream?: FetchFn) {
     throw new Error("OpenCode provider runtime is unavailable")
   }
 
+  const privateFetch = createClaudeFetch({
+    accessToken,
+    upstream,
+    authRecovery: {
+      reload: reloadPrimaryCredentials,
+      refresh: forceRefreshPrimaryCredentials,
+    },
+  })
   const fetchLayer = FetchHttpClient.layer.pipe(
-    Layer.provide(
-      Layer.succeed(
-        FetchHttpClient.Fetch,
-        createClaudeFetch({
-          accessToken,
-          upstream,
-          authRecovery: {
-            reload: reloadPrimaryCredentials,
-            refresh: forceRefreshPrimaryCredentials,
-          },
-        }),
-      ),
-    ),
+    Layer.provide(Layer.succeed(FetchHttpClient.Fetch, privateFetch)),
   )
 
-  return loadedRuntime.route.RequestExecutor.layer.pipe(
-    Layer.provide(fetchLayer),
-  )
+  return {
+    fetch: privateFetch,
+    layer: loadedRuntime.route.RequestExecutor.layer.pipe(
+      Layer.provide(fetchLayer),
+    ),
+  }
 }
 
 function withExecutor<Body, Prepared, Frame>(
   transport: Transport<Body, Prepared, Frame>,
-  layer: ReturnType<typeof executorLayer>,
+  executor: ReturnType<typeof executorLayer>,
 ): Transport<Body, Prepared, Frame> {
   return {
     ...transport,
@@ -115,7 +114,13 @@ function withExecutor<Body, Prepared, Frame>(
           { ...runtime, http },
           options,
         )
-      }).pipe(Effect.provide(layer)),
+      }).pipe(
+        Effect.provide(executor.layer),
+        // FetchHttpClient reads this reference at request execution time.
+        // Its merged client context lets a host-level Fetch override the
+        // construction layer, so bind our fetch at the execution boundary too.
+        Effect.provideService(FetchHttpClient.Fetch, executor.fetch),
+      ),
   }
 }
 

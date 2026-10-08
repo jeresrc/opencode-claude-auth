@@ -130,6 +130,53 @@ assert.throws(
 `)
 })
 
+test("host Fetch context cannot bypass the private Claude transport", async () => {
+  await runBun(String.raw`
+${commonImports}
+import { FetchHttpClient, HttpClientRequest } from "effect/unstable/http"
+let hostCalls = 0
+let middlewareCalls = 0
+const calls = []
+const hostFetch = async () => {
+  hostCalls++
+  throw new Error("Host fetch bypassed Claude transport")
+}
+const selected = model("claude-opus-5-5", {
+  apiKey: "oauth-access-token",
+  fetch: async (_input, init) => {
+    calls.push({
+      headers: new Headers(init.headers),
+      body: JSON.parse(init.body),
+    })
+    return new Response(${JSON.stringify(textSse)}, {
+      headers: { "content-type": "text/event-stream" },
+    })
+  },
+})
+const response = await Effect.runPromise(
+  LLM.generate(LLM.request({ model: selected, prompt: "hello" }), {
+    http: (request, next) => {
+      middlewareCalls++
+      return next(HttpClientRequest.setHeader(request, "x-test-hook", "preserved"))
+    },
+  }).pipe(
+    Effect.provide(LLMClient.layer.pipe(Layer.provide(Layer.succeed(RequestExecutor.Service, {
+      execute: () => Effect.die(new Error("Global executor must not send the request")),
+    })))),
+    Effect.provideService(FetchHttpClient.Fetch, hostFetch),
+  ),
+)
+assert.equal(response.text, "hello world")
+assert.equal(hostCalls, 0)
+assert.equal(middlewareCalls, 1)
+assert.equal(calls.length, 1)
+assert.equal(calls[0].headers.get("x-test-hook"), "preserved")
+assert.equal(calls[0].headers.get("authorization"), "Bearer oauth-access-token")
+assert.ok(calls[0].headers.get("anthropic-beta").includes("oauth-2025-04-20"))
+assert.ok(calls[0].body.system.length > 0)
+`)
+})
+
 test("settings.apiKey is sent as Bearer auth, never x-api-key", async () => {
   await runBun(String.raw`
 ${commonImports}

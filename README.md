@@ -43,12 +43,12 @@ To change accounts, select the account in Claude Code or `cswap`, then restart O
 
 ## Supported models
 
-The verified model IDs are `anthropic/claude-opus-5-5#high`, `anthropic/claude-fable-5-1`, and `anthropic/claude-fable-5`. Opus 5.5 requires the Claude Code protocol version `2.1.280` or newer, advertised by this build.
+The verified model IDs are `anthropic/claude-opus-5-5#high`, `anthropic/claude-fable-5-1`, `anthropic/claude-fable-5`, and `anthropic/claude-sonnet-5-5#medium`. Opus 5.5 requires the Claude Code protocol version `2.1.280` or newer, advertised by this build.
 
 Fable 5.1 is available as `anthropic/claude-fable-5-1`, including OpenCode
 variants such as `anthropic/claude-fable-5-1#high`.
 
-As of October 8, 2026, live OpenCode requests with valid OAuth credentials return Anthropic's "Third-party apps now draw from your extra usage" rejection. The same accounts work through the official Claude Code CLI. Upstream 2.2.1 contains no newer repair for this rejection; the credential migration fix does not restore subscription access or enable extra usage. Model availability in the catalog does not guarantee inference access.
+Verified on October 8, 2026 with OpenCode 2.0.25: all four models respond through this native plugin, including real tool execution and attached-image requests. The earlier extra-usage rejection was caused by the host fetch context bypassing the private Claude transport. The provider now binds its private fetch at request execution as well as construction, preserving OpenCode HTTP middleware. Model availability in the catalog alone does not establish inference health.
 
 ## Diagnostics
 
