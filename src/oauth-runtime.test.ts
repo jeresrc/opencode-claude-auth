@@ -4,9 +4,14 @@ import { it } from "node:test"
 
 it("refreshes OAuth from a compiled CLI host using a JavaScript runtime", () => {
   const preload = `
-    globalThis.fetch = async (_url, options) => {
-      const body = new URLSearchParams(options.body);
-      if (body.get('refresh_token') !== 'test-refresh') throw new Error('Missing stdin token');
+    globalThis.fetch = async (url, options) => {
+      if (url !== 'https://platform.claude.com/v1/oauth/token') throw new Error('Obsolete OAuth endpoint');
+      if (options.method !== 'POST') throw new Error('Incorrect OAuth method');
+      if (options.headers['Content-Type'] !== 'application/json') throw new Error('OAuth requires JSON');
+      const body = JSON.parse(options.body);
+      if (body.refresh_token !== 'test-refresh') throw new Error('Missing stdin token');
+      if (body.grant_type !== 'refresh_token') throw new Error('Incorrect grant');
+      if (body.client_id !== '9d1c250a-e61b-44d9-88ed-5944d1962f5e') throw new Error('Incorrect client');
       return { ok: true, json: async () => ({ access_token: 'test-access', expires_in: 3600 }) };
     };
   `

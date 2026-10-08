@@ -6,7 +6,7 @@ This branch is documented for local OpenCode v2 use only. It is not an npm insta
 
 ## Prerequisites
 
-- OpenCode `@opencode/cli@2.0.14` (current `latest` release), with matching `@opencode/ai` and `@opencode/plugin` packages.
+- OpenCode CLI and Desktop 2.0.25. The provider deliberately retains `@opencode/ai` and `@opencode/plugin` 2.0.14 with the host compatibility adapters; these dependency pins need not match the application version.
 - Claude Code installed and authenticated on this machine.
 - This repository checked out at `/Users/jeresrc/dev/lab/opencode-claude-auth`.
 
@@ -23,15 +23,13 @@ Configure OpenCode with the v2 plural `plugins` array and a local directory cont
 
 ```json
 {
-  "plugins": [
-    "/Users/jeresrc/.config/opencode/plugins/claude-auth"
-  ]
+  "plugins": ["/Users/jeresrc/.config/opencode/plugins/claude-auth"]
 }
 ```
 
-Then open OpenCode v2 **Integrations**, connect **Anthropic** using the **Claude Code credentials** method, and select the Claude Code account to use.
+Then open OpenCode v2 **Integrations** and connect **Anthropic** using the **Claude Code credentials** method. The plugin uses Claude Code's current primary account.
 
-To select a different Keychain source, reconnect the Anthropic integration and choose that account. If Claude Code replaces the credentials inside the already selected source, the plugin reconciles that account when OpenCode starts. A live Integration connection is still required; the plugin uses its metadata to identify the selected source.
+To change accounts, select the account in Claude Code or `cswap`, then restart OpenCode when its sessions are idle. The plugin reconciles that primary Keychain source on startup. It also recovers expired V1-imported OAuth connections that lack source metadata when exactly one primary Keychain account is available. Valid unidentified connections and unrelated OAuth methods are preserved.
 
 ## Architecture
 
@@ -41,7 +39,7 @@ To select a different Keychain source, reconnect the Anthropic integration and c
 - `src/catalog.ts` uses `provider.transform` to redirect Anthropic catalog entries to the local provider module via a `file://` provider URL and associates them with the Anthropic Integration.
 - `src/provider.ts` exposes an AnthropicMessages provider route backed by the native protocol/transport and a private request executor. The transport preserves required beta headers, and normalizes host models across separate SDK module instances.
 - `src/claude-fetch.ts` keeps the private executor/createClaudeFetch path: it sets `Authorization: Bearer ...`, applies Anthropic request/response transforms, handles retries for retryable Anthropic responses, and preserves SSE streaming while transforming event data at event boundaries.
-- On HTTP 401 after an in-place Claude Code login, restart OpenCode to reconcile the persisted Integration credential. Reconnect Anthropic manually only when selecting a different Keychain source.
+- On HTTP 401 after an in-place Claude Code login, the request executor attempts bounded credential recovery. Restarting OpenCode also reconciles the persisted Integration credential.
 
 ## Supported models
 
@@ -49,6 +47,8 @@ The verified model IDs are `anthropic/claude-opus-5-5#high`, `anthropic/claude-f
 
 Fable 5.1 is available as `anthropic/claude-fable-5-1`, including OpenCode
 variants such as `anthropic/claude-fable-5-1#high`.
+
+As of October 8, 2026, live OpenCode requests with valid OAuth credentials return Anthropic's "Third-party apps now draw from your extra usage" rejection. The same accounts work through the official Claude Code CLI. Upstream 2.2.1 contains no newer repair for this rejection; the credential migration fix does not restore subscription access or enable extra usage. Model availability in the catalog does not guarantee inference access.
 
 ## Diagnostics
 
@@ -74,6 +74,6 @@ MIT
 
 ## Upstream maintenance
 
-See [upstream audit](runbooks/upstream-sync-2026-09-22.md) for reviewed upstream revisions and the V2 adaptations retained in this fork. Compacted tool history now uses upstream's lossless placeholder repair by default; `OPENCODE_CLAUDE_AUTH_TOOL_REPAIR=drop` selects the alternative whole-turn drop strategy. Unsigned reasoning from other providers is still removed only from outgoing requests.
+See the [latest upstream audit](runbooks/upstream-sync-2026-10-08.md) for reviewed upstream revisions and the V2 adaptations retained in this fork. Compacted tool history now uses upstream's lossless placeholder repair by default; `OPENCODE_CLAUDE_AUTH_TOOL_REPAIR=drop` selects the alternative whole-turn drop strategy. Unsigned reasoning from other providers is still removed only from outgoing requests.
 
 Validation: `bun run typecheck`, `bun run test`, and `bun run build`. The operating runbook includes live model and plugin checks.

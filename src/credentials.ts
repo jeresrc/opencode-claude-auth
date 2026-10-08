@@ -178,7 +178,7 @@ function syncCredentialsSafely(
   }
 }
 
-export const OAUTH_TOKEN_URL = "https://claude.ai/v1/oauth/token"
+export const OAUTH_TOKEN_URL = "https://platform.claude.com/v1/oauth/token"
 export const OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 
 /**
@@ -236,15 +236,15 @@ export function refreshViaOAuth(
     let input = '';
     process.stdin.on('data', c => input += c);
     process.stdin.on('end', () => {
-      const body = new URLSearchParams({
+      const body = {
         grant_type: 'refresh_token',
         client_id: '${OAUTH_CLIENT_ID}',
         refresh_token: input.trim()
-      });
+      };
       fetch('${OAUTH_TOKEN_URL}', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: body.toString()
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
       })
       .then(r => { if (!r.ok) throw new Error(String(r.status)); return r.json(); })
       .then(d => { process.stdout.write(JSON.stringify(d)); })

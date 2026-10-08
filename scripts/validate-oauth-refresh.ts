@@ -2,7 +2,7 @@
  * Validate that the direct OAuth token refresh works against the real endpoint.
  *
  * Reads your current Claude Code credentials, attempts a token refresh via
- * POST https://claude.ai/v1/oauth/token, and writes new tokens back to storage.
+ * POST https://platform.claude.com/v1/oauth/token, and writes new tokens back to storage.
  *
  * IMPORTANT: This rotates your refresh token. Write-back is enabled by default
  * to keep your stored credentials valid.
@@ -80,11 +80,11 @@ async function main() {
 
   // Step 2: Prepare the request
   const refreshToken = account.credentials.refreshToken
-  const body = new URLSearchParams({
+  const body = {
     grant_type: "refresh_token",
     client_id: OAUTH_CLIENT_ID,
     refresh_token: refreshToken,
-  })
+  }
 
   console.log("\n2. OAuth refresh request:")
   console.log(`   POST ${OAUTH_TOKEN_URL}`)
@@ -104,8 +104,8 @@ async function main() {
   try {
     response = await fetch(OAUTH_TOKEN_URL, {
       method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: body.toString(),
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
     })
   } catch (err) {
     console.error("   FAIL: Network error:", (err as Error).message)

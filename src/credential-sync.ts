@@ -95,28 +95,39 @@ export async function reconcileConnectedCredential(
     if (!active || active.type !== "credential") return false
 
     const credential = await integration.connection.resolve(active)
-    if (
-      !credential ||
-      credential.type !== "oauth" ||
-      credential.methodID !== "claude-code"
-    ) {
+    if (!credential || credential.type !== "oauth") {
       return false
     }
 
-    const source = credential.metadata?.source
+    let source = credential.metadata?.source
+    // V1 auth.json imports become V2 OAuth credentials without plugin source
+    // metadata. Recover only expired imports; a valid unidentified connection
+    // may belong to another account and must not be silently replaced.
+    const expiredImport =
+      credential.methodID === "oauth" &&
+      source === undefined &&
+      Number.isFinite(credential.expires) &&
+      credential.expires <= Date.now()
+    if (credential.methodID !== "claude-code" && !expiredImport) return false
+
+    const accounts = resolvedDependencies.readAccounts()
+    if (source === undefined) {
+      if (accounts.length !== 1 || accounts[0]?.source !== PRIMARY_SERVICE) {
+        return false
+      }
+      source = PRIMARY_SERVICE
+    }
     if (typeof source !== "string" || source.length === 0) return false
 
-    const account = selectAccountForSource(
-      resolvedDependencies.readAccounts(),
-      source,
-    )
+    const account = selectAccountForSource(accounts, source)
     if (!account) {
       log("active_account_missing", { source })
       return false
     }
 
     if (
-      source === account.source &&
+      credential.methodID === "claude-code" &&
+      credential.metadata?.source === account.source &&
       credential.access === account.credentials.accessToken &&
       credential.refresh === account.credentials.refreshToken &&
       credential.expires === account.credentials.expiresAt

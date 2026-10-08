@@ -259,3 +259,99 @@ test("does not reconcile arbitrary unknown sources through the primary account",
   assert.equal(reloads, 0)
   assert.equal(connects, 0)
 })
+
+for (const scenario of [
+  { name: "expired V1 import", methodID: "oauth", expires: 1, expected: true },
+  {
+    name: "valid unidentified V1 import",
+    methodID: "oauth",
+    expires: Number.MAX_SAFE_INTEGER,
+    expected: false,
+  },
+  {
+    name: "missing expiry on V1 import",
+    methodID: "oauth",
+    expires: NaN,
+    expected: false,
+  },
+  {
+    name: "Claude Code connection missing source metadata",
+    methodID: "claude-code",
+    expires: 1,
+    expected: true,
+  },
+  {
+    name: "unrelated expired OAuth method",
+    methodID: "another-plugin",
+    expires: 1,
+    expected: false,
+  },
+  {
+    name: "expired V1 import with an explicit unrelated source",
+    methodID: "oauth",
+    expires: 1,
+    source: "unrelated-source",
+    expected: false,
+  },
+  {
+    name: "expired V1 import with ambiguous accounts",
+    methodID: "oauth",
+    expires: 1,
+    accounts: [account("Claude Code-credentials"), account("another-account")],
+    expected: false,
+  },
+  {
+    name: "expired V1 import without the primary Keychain account",
+    methodID: "oauth",
+    expires: 1,
+    accounts: [account("file")],
+    expected: false,
+  },
+]) {
+  test(`credential migration: ${scenario.name}`, async () => {
+    let reloads = 0
+    let connects = 0
+    const result = await reconcileConnectedCredential(
+      {
+        reload: async () => {
+          reloads += 1
+        },
+        connection: {
+          active: async () => ({
+            type: "credential",
+            id: "imported-id",
+            label: "default",
+          }),
+          resolve: async () => ({
+            type: "oauth",
+            methodID: scenario.methodID,
+            access: "old-access",
+            refresh: "old-refresh",
+            expires: scenario.expires,
+            metadata: scenario.source ? { source: scenario.source } : undefined,
+          }),
+        },
+        oauth: {
+          connect: async (input) => {
+            connects += 1
+            assert.deepEqual(input, {
+              integrationID: "anthropic",
+              methodID: "claude-code",
+              inputs: { source: "Claude Code-credentials" },
+              label: "default",
+            })
+            return { data: { attemptID: "migration-id", mode: "auto" } }
+          },
+          status: async () => ({ data: { status: "complete" } }),
+        },
+      },
+      {
+        readAccounts: () =>
+          scenario.accounts ?? [account("Claude Code-credentials")],
+      },
+    )
+    assert.equal(result, scenario.expected)
+    assert.equal(connects, scenario.expected ? 1 : 0)
+    assert.equal(reloads, scenario.expected ? 1 : 0)
+  })
+}

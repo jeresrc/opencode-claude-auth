@@ -10,7 +10,7 @@ Starting September 12, 2026 at 06:00 America/Argentina/Buenos_Aires, the daily c
 
 1. Confirm the `opencode2` binary exists and record its version.
 2. Run `opencode2 service status`.
-3. On current `@opencode/cli` 2.x (2.0.18 as of September 27), query `opencode2 api get /api/info`; require exit 0, the same version as the CLI, and a positive running PID. `/api/health` was removed and returns 404. Only legacy beta versions use `/api/health` and `healthy: true`.
+3. On current `@opencode/cli` 2.x (2.0.25 as of October 8), query `opencode2 api get /api/info`; require exit 0, the same version as the CLI, and a positive running PID. `/api/health` was removed and returns 404. Only legacy beta versions use `/api/health` and `healthy: true`.
 4. Query `opencode2 api get /api/plugin` and compare it with the explicit plugins in `/Users/jeresrc/.config/opencode/opencode.json`. Parse this file as JSONC and accept both `plugin` and `plugins`. For configured local directories, compare the active source with their resolved `index.js` or `index.ts`, rather than requiring the directory string to equal the API's source file.
 5. Require plugin ID `opencode-claude-auth` to be active. Its current entrypoint is `/Users/jeresrc/.config/opencode/plugins/claude-auth/index.js`, which re-exports `/Users/jeresrc/dev/lab/opencode-claude-auth/opencode-claude-auth.js`. Require both files and the underlying build output to exist; inspect the re-export to verify the original implementation is still used.
 6. Run `claude auth status` and require `loggedIn: true` with a non-`none` authentication method.
@@ -40,6 +40,7 @@ Report `INCIDENT` when any required command fails, the API is unhealthy, any plu
 Classify authentication failures separately from transient upstream failures:
 
 - `Invalid bearer token` or HTTP 401: authentication incident.
+- `Third-party apps now draw from your extra usage`: provider-side access/billing rejection, even when the subscription works through the official Claude Code CLI. Do not confuse it with expired OAuth, enable extra usage automatically, or treat a successful `cswap`/Claude Code probe as a successful OpenCode model test. Preserve the user's native plugin; check upstream for a compatible documented repair.
 - HTTP 429 or 529: rate-limit/overload incident.
 - HTTP 502, 503, or 504 after retries: transient gateway incident.
 - An Opus 5.5 rejection requiring Claude Code 2.1.280 or newer, or Fable 5.1 requiring 2.1.251 or newer: custom-plugin version compatibility regression.
